@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KALMATE Notice Watcher (카테고리 1단계 깊이 탐색 + NoticeView 전용 + 첫 실행 알림)
-- 시작 URL(상위 카테고리):
-    - https://www.kalmate.com/Notice/ListView/1
-    - https://www.kalmate.com/Notice/ListView/11
-- 동작:
-    1) 상위 카테고리 페이지에서 하위 카테고리 /Notice/ListView/... 링크들을 모읍니다.
-    2) 각 하위 카테고리 첫 페이지에서 NoticeView?seq_no=... 링크(또는 onclick의 seq_no)만 게시글로 인식합니다.
-    3) 첫 실행 시(BASELINE) 최신글 스냅샷을 텔레그램으로 1회 발송하고, 이후엔 새 글만 알림.
+KALMATE Notice Watcher
+- 상위 카테고리(1, 11) → 하위 카테고리(ListView/xx) 1단계 순회
+- NoticeView 링크 직접 탐지 + 실패 시 HTML에서 seq_no 후보 추출 → 상세페이지(NoticeView) 접속해 제목/날짜 파싱
+- 첫 실행(BASELINE) 알림 지원
+
 환경변수:
-  TG_BOT_TOKEN, TG_CHAT_ID
-  FIRST_RUN_NOTIFY  ("1"/"true"면 첫 실행 알림, 기본 True)
-  FIRST_RUN_TOP_N   (첫 실행 목록당 몇 개 보낼지, 기본 1)
+  TG_BOT_TOKEN, TG_CHAT_ID  (필수)
+  FIRST_RUN_NOTIFY  = 1/true (기본: true)
+  FIRST_RUN_TOP_N   = 정수 (기본: 1, 첫 실행에 목록당 몇 개 보낼지)
 """
 
 import os
@@ -21,7 +18,7 @@ import json
 import time
 import logging
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Iterable, Set
+from typing import List, Dict, Optional, Iterable, Set, Tuple
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -39,14 +36,14 @@ SEED_LIST_URLS = [
 ]
 STATE_FILE = Path(__file__).with_name("seen_posts.json")
 
-# 첫 실행 알림
 def _env_true(v: Optional[str]) -> bool:
     return str(v).lower() in {"1", "true", "yes", "y", "on"}
+
 FIRST_RUN_NOTIFY = _env_true(os.getenv("FIRST_RUN_NOTIFY", "1"))
 FIRST_RUN_TOP_N = int(os.getenv("FIRST_RUN_TOP_N", "1"))
 
-# 하위 카테고리 최대 탐색 개수(안전장치)
-SUBLIST_MAX = 30
+SUBLIST_MAX = 40            # 하위 카테고리 최대 탐색(안전장치)
+DETAIL_FETCH_MAX = 40       # 상세페이지 최대 조회(안전장치)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -59,7 +56,7 @@ HEADERS = {
 
 @dataclass(frozen=True)
 class Post:
-    id: str            # seq_no 등
+    id: str            # seq_no
     title: str
     url: str
     date: Optional[str] = None
@@ -87,8 +84,11 @@ def _with_timeout(fn, *, timeout: int):
         return fn(method, url, **kwargs)
     return wrapper
 
-def get_html(session: requests.Session, url: str) -> str:
-    r = session.get(url)
+def get_html(session: requests.Session, url: str, referer: Optional[str] = None) -> str:
+    headers = {}
+    if referer:
+        headers["Referer"] = referer
+    r = session.get(url, headers=headers)
     r.raise_for_status()
     return r.text
 
@@ -106,16 +106,22 @@ DATE_PATS = [
     re.compile(r"\b(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일\b"),
 ]
 
+def first_date_in_text(text: str) -> Optional[str]:
+    for pat in DATE_PATS:
+        m = pat.search(text or "")
+        if m:
+            try:
+                y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                return f"{y:04d}-{mo:02d}-{d:02d}"
+            except Exception:
+                pass
+    return None
+
 def first_date_in_list(candidates: Iterable[str]) -> Optional[str]:
-    for text in candidates:
-        for pat in DATE_PATS:
-            m = pat.search(text)
-            if m:
-                try:
-                    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                    return f"{y:04d}-{mo:02d}-{d:02d}"
-                except Exception:
-                    pass
+    for t in candidates:
+        d = first_date_in_text(t)
+        if d:
+            return d
     return None
 
 def guess_date_from_tr(tr) -> Optional[str]:
@@ -142,11 +148,12 @@ def safe_int(s: str) -> int:
 
 # ---------------------------- 파싱: 게시글 ----------------------------
 
-# NoticeView 링크만 게시글로 인정
-SEQ_FROM_ONCLICK_PATTERNS = [
+SEQ_FROM_ONCLICK_PATS = [
     re.compile(r"seq_no\s*=\s*['\"]?(\d+)", re.I),
     re.compile(r"NoticeView\?seq_no=(\d+)", re.I),
     re.compile(r"\(\s*(\d{6,})\s*\)"),
+    re.compile(r"fn(?:View|Detail|Go)\s*\(\s*['\"]?(\d+)", re.I),
+    re.compile(r"__doPostBack\([^,]+,\s*'?(?:seq_no\s*=\s*)?(\d+)'?\)", re.I),
 ]
 
 def extract_seq_from_url(url: str) -> Optional[str]:
@@ -159,20 +166,26 @@ def extract_seq_from_url(url: str) -> Optional[str]:
                 return vals[0]
     return None
 
-def extract_seq_from_onclick(onclick: str) -> Optional[str]:
-    if not onclick:
-        return None
-    for pat in SEQ_FROM_ONCLICK_PATTERNS:
-        m = pat.search(onclick)
-        if m:
-            return m.group(1)
-    return None
+def extract_seqs_from_html(html: str) -> List[str]:
+    seqs: Set[str] = set()
+    # 1) href 안의 NoticeView
+    for m in re.finditer(r"Notice/NoticeView\?[^\"'>]*?seq_no=(\d+)", html, flags=re.I):
+        seqs.add(m.group(1))
+    # 2) onclick 등 다양한 패턴
+    for pat in SEQ_FROM_ONCLICK_PATS:
+        for m in pat.finditer(html):
+            seqs.add(m.group(1))
+    # 길이 필터(보통 6자리 이상)
+    seqs = {s for s in seqs if len(s) >= 6}
+    # 내림차순(신규가 보통 큼)
+    return sorted(seqs, key=lambda x: safe_int(x), reverse=True)
 
-def parse_notice_posts_from_html(html: str) -> List[Post]:
+def parse_notice_posts_from_html(session: requests.Session, html: str, referer: Optional[str] = None) -> List[Post]:
     soup = BeautifulSoup(html, "html.parser")
     posts: List[Post] = []
 
     # 1) href로 NoticeView 직접 연결된 경우
+    direct_found = False
     for a in soup.find_all("a", href=True):
         href = (a["href"] or "").strip()
         if "Notice/NoticeView" not in href:
@@ -185,18 +198,26 @@ def parse_notice_posts_from_html(html: str) -> List[Post]:
         tr = a.find_parent("tr")
         date_text = guess_date_from_tr(tr) if tr else guess_date_near(a)
         posts.append(Post(id=seq, title=title, url=url, date=date_text))
+        direct_found = True
 
-    # 2) onclick에 seq_no가 있는 경우(일부 사이트 형태)
-    if not posts:
-        for a in soup.find_all("a"):
-            seq = extract_seq_from_onclick(a.get("onclick", ""))
-            if not seq:
-                continue
-            url = f"{BASE_URL}/Notice/NoticeView?seq_no={seq}"
-            title = a.get_text(strip=True) or url
-            tr = a.find_parent("tr")
-            date_text = guess_date_from_tr(tr) if tr else guess_date_near(a)
-            posts.append(Post(id=seq, title=title, url=url, date=date_text))
+    # 2) 실패 시: HTML에서 seq_no 후보 찾아서 상세페이지 열어 제목/날짜 파싱
+    if not direct_found:
+        seqs = extract_seqs_from_html(html)
+        if seqs:
+            detail_count = 0
+            for seq in seqs:
+                if detail_count >= DETAIL_FETCH_MAX:
+                    break
+                detail_url = f"{BASE_URL}/Notice/NoticeView?seq_no={seq}"
+                try:
+                    detail_html = get_html(session, detail_url, referer=referer)
+                    title, date_text = parse_notice_detail(detail_html)
+                    title = title or detail_url
+                    posts.append(Post(id=seq, title=title, url=detail_url, date=date_text))
+                    detail_count += 1
+                except Exception:
+                    # 상세페이지가 막히면 넘어감
+                    continue
 
     # dedupe + 정렬
     uniq: Dict[str, Post] = {}
@@ -206,40 +227,77 @@ def parse_notice_posts_from_html(html: str) -> List[Post]:
     result.sort(key=lambda p: safe_int(p.id), reverse=True)
     return result
 
+def parse_notice_detail(html: str) -> Tuple[Optional[str], Optional[str]]:
+    """상세페이지에서 제목/날짜 추출(여러 후보 시도)"""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 1) 흔한 제목 셀렉터
+    for sel in ["h1", "h2", ".title", ".subject", ".board_tit", ".board-title", ".notice-title"]:
+        el = soup.select_one(sel)
+        if el and el.get_text(strip=True):
+            title = el.get_text(strip=True)
+            # 날짜도 근처에서 시도
+            date_text = first_date_in_text(el.parent.get_text(" ", strip=True)) if el.parent else None
+            return title, date_text
+
+    # 2) 테이블형 (제목/작성일 등)
+    for th in soup.find_all("th"):
+        key = th.get_text(strip=True)
+        if "제목" in key or "Title" in key:
+            td = th.find_next("td")
+            if td:
+                title = td.get_text(strip=True)
+                # 근처에서 날짜 후보
+                date_td = th.find_parent("tr").find_next_sibling("tr")
+                date_text = first_date_in_text((date_td.get_text(" ", strip=True) if date_td else "") or "")
+                return title, date_text
+
+    # 3) og:title 메타
+    og = soup.find("meta", property="og:title")
+    if og and og.get("content"):
+        title = og["content"].strip()
+        date_text = first_date_in_text(soup.get_text(" ", strip=True))
+        return title, date_text
+
+    # 4) <title> 태그
+    if soup.title and soup.title.string:
+        title = soup.title.string.strip()
+        date_text = first_date_in_text(soup.get_text(" ", strip=True))
+        return title, date_text
+
+    # 5) 최후: 본문에서 첫 줄
+    body_text = soup.get_text("\n", strip=True)
+    first_line = (body_text.splitlines() or [""])[0].strip()
+    return (first_line or None), first_date_in_text(body_text)
+
 # ---------------------------- 파싱: 하위 카테고리 ----------------------------
 
 LISTVIEW_LINK_PAT = re.compile(r"^/Notice/ListView/[\w\-]+", re.I)
 
 def extract_sublist_urls(html: str) -> List[str]:
-    """상위 카테고리 화면에서 하위 카테고리 ListView 링크들을 모은다."""
     soup = BeautifulSoup(html, "html.parser")
     urls: Set[str] = set()
 
-    # a[href] 에서 /Notice/ListView/... 만 수집 (NoticeView는 제외)
+    # a[href]에서 /Notice/ListView/... 수집
     for a in soup.find_all("a", href=True):
         href = (a["href"] or "").strip()
-        if "Notice/NoticeView" in href:
+        if "/Notice/NoticeView" in href:
             continue
         if "/Notice/ListView/" not in href:
             continue
-        # 예) /Notice/ListView/25, /Notice/ListView/11J 등
         m = LISTVIEW_LINK_PAT.search(href if href.startswith("/") else "/" + href)
         if not m:
             continue
-        url = absolutize(href)
-        urls.add(url)
+        urls.add(absolutize(href))
 
-    # onclick 안에 ListView 경로가 박혀 있는 경우 대비
+    # onclick 내 ListView 링크
     for a in soup.find_all("a"):
         onclick = a.get("onclick", "") or ""
-        # ListView/25, ListView/11J 등 추출
         m = re.search(r"ListView/([\w\-]+)", onclick, flags=re.I)
         if m:
             urls.add(f"{BASE_URL}/Notice/ListView/{m.group(1)}")
 
-    # 안전상 상위 N개만
-    out = list(urls)
-    out.sort()
+    out = sorted(urls)
     return out[:SUBLIST_MAX]
 
 # ---------------------------- 상태/알림 ----------------------------
@@ -289,7 +347,7 @@ def main():
     baseline_blocks: List[str] = []
     baseline_posts: List[Post] = []
 
-    # 1) 상위 카테고리에서 하위 카테고리 URL 수집
+    # 1) 상위 카테고리에서 하위 카테고리 수집
     sublists: Set[str] = set()
     for seed in SEED_LIST_URLS:
         try:
@@ -301,14 +359,14 @@ def main():
             logging.exception("상위 카테고리 처리 오류: %s", seed)
 
     if not sublists:
-        logging.info("하위 카테고리를 찾지 못했습니다. (사이트 구조 변화 가능)")
+        logging.info("하위 카테고리를 찾지 못했습니다.")
         return
 
-    # 2) 각 하위 카테고리 첫 페이지에서 게시글(NoticeView) 수집
+    # 2) 각 하위 카테고리 첫 페이지에서 게시글 수집
     for sub in sorted(sublists):
         try:
-            sub_html = get_html(session, sub)
-            posts = parse_notice_posts_from_html(sub_html)
+            sub_html = get_html(session, sub, referer=sub)  # referer 세팅
+            posts = parse_notice_posts_from_html(session, sub_html, referer=sub)
             if not posts:
                 logging.info("게시글(NoticeView) 없음: %s", sub)
                 continue
@@ -332,7 +390,6 @@ def main():
     if is_first_run and FIRST_RUN_NOTIFY and baseline_blocks:
         msg = "KALMATE 공지 BASELINE 스냅샷\n\n" + "\n\n".join(baseline_blocks)
         notify_telegram(msg)
-        # 베이스라인도 저장
         for p in baseline_posts:
             seen[p.id] = {"title": p.title, "url": p.url, "date": p.date, "ts": int(time.time())}
         save_seen(seen)
