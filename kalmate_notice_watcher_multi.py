@@ -1,28 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KALMATE Notice Watcher (Pro / with verification flags)
-- Monitors:
+KALMATE Notice Watcher (multi-page, NoticeView 지원)
+- 모니터링 대상:
     - https://www.kalmate.com/Notice/ListView/1
     - https://www.kalmate.com/Notice/ListView/11
-- Sends Telegram notifications on NEW posts.
-- Includes verification options to confirm it's working without waiting for new posts.
-
-Usage examples:
-  # 1) Send a TEST message to Telegram (credentials check)
-  python kalmate_notice_watcher_pro.py --send-test
-
-  # 2) Show top 5 latest items from each list (parsing check)
-  python kalmate_notice_watcher_pro.py --show-latest 5
-
-  # 3) Do a dry-run (detect new posts but DON'T notify or write state)
-  python kalmate_notice_watcher_pro.py --dry-run
-
-  # 4) Force a heartbeat notification with the current latest items
-  python kalmate_notice_watcher_pro.py --force-notify
-
-  # 5) Reset seen state (start fresh)
-  python kalmate_notice_watcher_pro.py --reset-seen
+- 새 글 감지 시 텔레그램으로 알림.
+- 핵심 수정: NoticeView?seq_no=... 형태의 상세 링크를 정확히 파싱하여
+  'seq_no'를 고유 ID로 사용 (예: https://www.kalmate.com/Notice/NoticeView?seq_no=20251223&...).
 """
 
 import os
@@ -30,17 +15,17 @@ import re
 import json
 import time
 import logging
-import argparse
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# ---------------------------- Config ----------------------------
+# ---------------------------- 설정 ----------------------------
 
 BASE_URL = "https://www.kalmate.com"
 LIST_URLS = [
@@ -49,33 +34,26 @@ LIST_URLS = [
 ]
 STATE_FILE = Path(__file__).with_name("seen_posts.json")
 
-# Telegram (use env vars; do NOT hardcode in public repos)
-# Set these in your environment or GitHub Actions Secrets:
-#   TG_BOT_TOKEN, TG_CHAT_ID
-# If either is missing, notifications are skipped with a log warning.
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    )
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 }
 
-# ---------------------------- Models ----------------------------
+# ---------------------------- 데이터 구조 ----------------------------
 
 @dataclass(frozen=True)
 class Post:
-    id: str
+    id: str            # 고유 식별자 (seq_no 등)
     title: str
     url: str
     date: Optional[str] = None  # YYYY-MM-DD
 
-# ---------------------------- HTTP ----------------------------
+# ---------------------------- HTTP 유틸 ----------------------------
 
 def make_session(timeout: int = 15) -> requests.Session:
     session = requests.Session()
@@ -99,61 +77,38 @@ def _with_timeout(fn, *, timeout: int):
         return fn(method, url, **kwargs)
     return wrapper
 
-# ---------------------------- Parsing ----------------------------
+# ---------------------------- 파싱 ----------------------------
+# 기존: /Notice/(View|Detail|Read|ListView)/숫자  만 찾았음 → 누락 발생
+# 수정: /Notice/NoticeView?seq_no=... 형태를 1순위로 인식하고, seq_no를 ID로 사용
 
-HREF_ID_PAT = re.compile(r"/Notice/(?:View|Detail|Read|ListView)/(?P<id>\d+)", re.I)
+HREF_NUM_ID_PAT = re.compile(r"/Notice/(?:View|Detail|Read|ListView)/(?P<id>\d+)", re.I)
 
 def parse_posts(html: str) -> List[Post]:
     soup = BeautifulSoup(html, "html.parser")
     posts: List[Post] = []
 
-    # 1) Table layout
-    table = soup.find("table")
-    if table:
-        tbody = table.find("tbody") or table
-        for tr in tbody.find_all("tr"):
-            a = tr.find("a", href=True)
-            if not a:
-                continue
-            href = a["href"]
-            pid = extract_id(href) or href
-            title = a.get_text(strip=True)
-            url = absolutize(href)
-            date_text = guess_date_from_tr(tr)
-            posts.append(Post(id=pid, title=title, url=url, date=date_text))
+    # 1) NoticeView 링크를 우선적으로 수집 (가장 정확)
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if "Notice/NoticeView" in href:
+            post = make_post_from_anchor(a, href)
+            if post:
+                posts.append(post)
 
-    # 2) <li> list layout
-    if not posts:
-        for li in soup.find_all("li"):
-            a = li.find("a", href=True)
-            if not a:
-                continue
-            title = a.get_text(strip=True)
-            if len(title) < 2:
-                continue
-            href = a["href"]
-            if "/Notice/" not in href:
-                continue
-            pid = extract_id(href) or href
-            url = absolutize(href)
-            date_text = guess_date_near(li)
-            posts.append(Post(id=pid, title=title, url=url, date=date_text))
-
-    # 3) Fallback: scan all anchors
+    # 2) 그래도 없으면(혹시 모를 구조 변화 대비) 숫자 ID 패턴으로 보완
     if not posts:
         for a in soup.find_all("a", href=True):
-            href = a["href"]
+            href = a["href"].strip()
             if "/Notice/" not in href:
                 continue
-            title = a.get_text(strip=True) or href
-            if len(title) < 2:
+            m = HREF_NUM_ID_PAT.search(href)
+            if not m:
                 continue
-            pid = extract_id(href) or href
-            url = absolutize(href)
-            date_text = guess_date_near(a)
-            posts.append(Post(id=pid, title=title, url=url, date=date_text))
+            post = make_post_from_anchor(a, href)
+            if post:
+                posts.append(post)
 
-    # dedupe and sort
+    # 중복 제거(같은 id 기준) 및 정렬
     unique: Dict[str, Post] = {}
     for p in posts:
         unique[p.id] = p
@@ -161,9 +116,43 @@ def parse_posts(html: str) -> List[Post]:
     result.sort(key=lambda p: safe_int(p.id), reverse=True)
     return result
 
-def extract_id(href: str) -> Optional[str]:
-    m = HREF_ID_PAT.search(href)
-    return m.group("id") if m else None
+def make_post_from_anchor(a, href: str) -> Optional[Post]:
+    """a 태그와 href에서 제목/URL/ID/날짜를 추출해 Post로 변환"""
+    url = absolutize(href)
+    pid = extract_post_id(url)
+    if not pid:
+        return None
+
+    title = a.get_text(strip=True)
+    if not title:
+        title = url  # 제목이 비어있으면 URL로 대체
+
+    # 날짜는 보통 같은 행(tr)이나 주변에 있음
+    tr = a.find_parent("tr")
+    date_text = guess_date_from_tr(tr) if tr else guess_date_near(a)
+
+    return Post(id=pid, title=title, url=url, date=date_text)
+
+def extract_post_id(url: str) -> Optional[str]:
+    """URL에서 고유 ID 추출 로직
+       - 1순위: NoticeView?seq_no=... → seq_no 반환
+       - 2순위: /Notice/.../숫자  → 그 숫자
+       - 실패 시: None (해당 링크는 게시글이 아닐 가능성)
+    """
+    parsed = urlparse(url)
+    # NoticeView?seq_no=...
+    if parsed.path.lower().endswith("/notice/noticeview"):
+        q = parse_qs(parsed.query)
+        seqs = q.get("seq_no") or q.get("seqNo") or q.get("seq")
+        if seqs and seqs[0]:
+            return seqs[0]
+
+    # 보완: /Notice/XXX/<숫자>
+    m = HREF_NUM_ID_PAT.search(parsed.path)
+    if m:
+        return m.group("id")
+
+    return None
 
 def absolutize(href: str) -> str:
     if href.startswith(("http://", "https://")):
@@ -173,6 +162,8 @@ def absolutize(href: str) -> str:
     return f"{BASE_URL}{href}"
 
 def guess_date_from_tr(tr) -> Optional[str]:
+    if not tr:
+        return None
     tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
     return first_date_in_list(tds)
 
@@ -209,7 +200,7 @@ def safe_int(s: str) -> int:
     except Exception:
         return -1
 
-# ---------------------------- State ----------------------------
+# ---------------------------- 상태 저장/로드 ----------------------------
 
 def load_seen() -> Dict[str, Dict]:
     if STATE_FILE.exists():
@@ -217,36 +208,36 @@ def load_seen() -> Dict[str, Dict]:
             with STATE_FILE.open("r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            logging.warning("Failed to read state file, starting fresh.")
+            logging.warning("STATE_FILE 읽기 실패, 새로 시작합니다.")
     return {}
 
 def save_seen(data: Dict[str, Dict]):
     with STATE_FILE.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-# ---------------------------- Notify ----------------------------
+# ---------------------------- 알림 ----------------------------
 
 def notify_telegram(text: str):
     token = os.getenv("TG_BOT_TOKEN")
     chat_id = os.getenv("TG_CHAT_ID")
-    if not token or not chat_id:
-        logging.warning("Telegram token/chat_id not set. Skipping notification.")
+    if not (token and chat_id):
+        logging.warning("텔레그램 토큰/챗ID 미설정. 알림 건너뜀.")
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     resp = requests.post(url, data={"chat_id": chat_id, "text": text})
     if resp.status_code == 200:
-        logging.info("Telegram notification sent.")
+        logging.info("텔레그램 알림 전송 완료")
     else:
-        logging.warning("Telegram notification failed: %s %s", resp.status_code, resp.text)
+        logging.warning("텔레그램 알림 실패: %s %s", resp.status_code, resp.text)
 
 def format_post_lines(posts: List[Post], source_url: str) -> str:
-    lines = [f"[List] {source_url}"]
+    lines = [f"[목록] {source_url}"]
     for p in posts:
         date = f" ({p.date})" if p.date else ""
         lines.append(f"- {p.title}{date}\n  {p.url}")
     return "\n".join(lines)
 
-# ---------------------------- Core ----------------------------
+# ---------------------------- 메인 로직 ----------------------------
 
 def fetch_list_html(session: requests.Session, url: str) -> str:
     r = session.get(url)
@@ -261,87 +252,36 @@ def update_seen(seen_map: Dict[str, Dict], posts: List[Post]):
     for p in posts:
         seen_map[p.id] = {"title": p.title, "url": p.url, "date": p.date, "ts": now}
 
-# ---------------------------- CLI ----------------------------
-
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--send-test", action="store_true", help="Send a test message to Telegram.")
-    parser.add_argument("--show-latest", type=int, default=0, help="Show top N latest items from each list.")
-    parser.add_argument("--dry-run", action="store_true", help="Detect but do not notify or write state.")
-    parser.add_argument("--force-notify", action="store_true", help="Send a heartbeat with current latest items.")
-    parser.add_argument("--reset-seen", action="store_true", help="Delete seen_posts.json and start fresh.")
-    args = parser.parse_args()
-
-    if args.reset_seen and STATE_FILE.exists():
-        STATE_FILE.unlink()
-        print("Seen state reset.")
-
     session = make_session()
-
-    # 1) Test message
-    if args.send_test:
-        notify_telegram("TEST: KALMATE watcher is working ✅")
-        return
-
-    # 2) Show latest N
-    if args.show_latest > 0:
-        for url in LIST_URLS:
-            html = fetch_list_html(session, url)
-            posts = parse_posts(html)
-            print(f"\n== {url} ==")
-            for p in posts[:args.show_latest]:
-                print(f"- {p.title} ({p.date})")
-                print(f"  {p.url}")
-        return
-
-    # Normal / dry-run / force-notify
     seen = load_seen()
     total_new = 0
     all_new_lines: List[str] = []
-    latest_blocks: List[str] = []
 
     for list_url in LIST_URLS:
         try:
             html = fetch_list_html(session, list_url)
             posts = parse_posts(html)
-            logging.info("Parsed %d posts from %s", len(posts), list_url)
             if not posts:
+                logging.warning("파싱 결과 없음: %s", list_url)
                 continue
 
-            # For heartbeat
-            latest_blocks.append(format_post_lines(posts[:1], list_url))
-
-            # New detection
             new_posts = find_new_posts(posts, seen)
             if new_posts:
                 new_posts.sort(key=lambda p: safe_int(p.id), reverse=True)
                 all_new_lines.append(format_post_lines(new_posts, list_url))
+                update_seen(seen, new_posts)
                 total_new += len(new_posts)
-                if not args.dry_run:
-                    update_seen(seen, new_posts)
         except Exception:
-            logging.exception("Error processing %s", list_url)
-
-    if args.force_notify and latest_blocks:
-        text = "HEARTBEAT: KALMATE watcher is alive 💓\n\n" + "\n\n".join(latest_blocks)
-        if not args.dry_run:
-            notify_telegram(text)
-            save_seen(seen)
-        print(text)
-        return
+            logging.exception("목록 처리 중 오류: %s", list_url)
 
     if total_new > 0:
-        text = f"KALMATE Notice New Posts ({total_new})\n\n" + "\n".join(all_new_lines)
-        if args.dry_run:
-            print("[DRY-RUN] Would send:\n", text)
-        else:
-            notify_telegram(text)
-            save_seen(seen)
-        logging.info("Processed %d new posts", total_new)
+        text = f"KALMATE 공지 새 글 알림 ({total_new}건)\n\n" + "\n\n".join(all_new_lines)
+        notify_telegram(text)
+        save_seen(seen)
+        logging.info("새 글 %d건 처리 완료", total_new)
     else:
-        logging.info("No new posts")
-        if args.dry_run:
-            print("[DRY-RUN] No new posts detected.")
+        logging.info("새 글 없음")
 
 if __name__ == "__main__":
     main()
