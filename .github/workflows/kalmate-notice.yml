@@ -2,22 +2,28 @@ name: KALMATE Notice Watcher
 
 on:
   schedule:
-    # 10분마다 실행 (원하면 */5 로 더 자주, */30 으로 더 느리게)
     - cron: "*/10 * * * *"
-  workflow_dispatch: {}  # 수동 실행 버튼
+  workflow_dispatch: {}
 
 permissions:
-  contents: write   # seen_posts.json 커밋을 위해 필요
+  contents: write
 
 jobs:
   run-watcher:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # 🔍 여기서 현재 위치/파일 리스트 확인
+      - name: Show working directory & list files
+        run: |
+          pwd
+          ls -la
+          echo "---- recursive list ----"
+          ls -R
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,20 +35,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4
 
-      # (선택) 자격 증명 및 텔레그램 연결 테스트
-      # - name: Send Telegram test message
-      #   env:
-      #     TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-      #     TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      #   run: |
-      #     python kalmate_notice_watcher_pro.py --send-test
-
       - name: Run watcher
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
-          python kalmate_notice_watcher_pro.py
+          # 👉 루트에 있다면 이 경로가 맞습니다.
+          python ./kalmate_notice_watcher_pro.py
 
       - name: Commit & push state if changed
         run: |
