@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KALMATE Notice Watcher (multi-page, NoticeView 지원)
-- 모니터링 대상:
+KALMATE Notice Watcher (multi-page, NoticeView 전용 파싱)
+- 모니터링:
     - https://www.kalmate.com/Notice/ListView/1
     - https://www.kalmate.com/Notice/ListView/11
-- 새 글 감지 시 텔레그램으로 알림.
-- 핵심 수정: NoticeView?seq_no=... 형태의 상세 링크를 정확히 파싱하여
-  'seq_no'를 고유 ID로 사용 (예: https://www.kalmate.com/Notice/NoticeView?seq_no=20251223&...).
+- 새 글 감지 시 텔레그램 알림.
+- 핵심: NoticeView?seq_no=... 형태만 수집 (ListView 카테고리 링크는 무시)
 """
 
 import os
@@ -24,8 +23,6 @@ import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
-# ---------------------------- 설정 ----------------------------
 
 BASE_URL = "https://www.kalmate.com"
 LIST_URLS = [
@@ -44,16 +41,12 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 }
 
-# ---------------------------- 데이터 구조 ----------------------------
-
 @dataclass(frozen=True)
 class Post:
-    id: str            # 고유 식별자 (seq_no 등)
+    id: str            # seq_no 등 고유 식별자
     title: str
     url: str
     date: Optional[str] = None  # YYYY-MM-DD
-
-# ---------------------------- HTTP 유틸 ----------------------------
 
 def make_session(timeout: int = 15) -> requests.Session:
     session = requests.Session()
@@ -78,37 +71,44 @@ def _with_timeout(fn, *, timeout: int):
     return wrapper
 
 # ---------------------------- 파싱 ----------------------------
-# 기존: /Notice/(View|Detail|Read|ListView)/숫자  만 찾았음 → 누락 발생
-# 수정: /Notice/NoticeView?seq_no=... 형태를 1순위로 인식하고, seq_no를 ID로 사용
 
+# NoticeView 링크의 seq_no를 최우선으로 추출
 HREF_NUM_ID_PAT = re.compile(r"/Notice/(?:View|Detail|Read|ListView)/(?P<id>\d+)", re.I)
+SEQ_FROM_ONCLICK_PATTERNS = [
+    re.compile(r"seq_no\s*=\s*['\"]?(\d+)", re.I),
+    re.compile(r"NoticeView\?seq_no=(\d+)", re.I),
+    re.compile(r"\(\s*(\d{6,})\s*\)"),  # 함수콜 형식에서 숫자 인자만 있을 때
+]
 
 def parse_posts(html: str) -> List[Post]:
     soup = BeautifulSoup(html, "html.parser")
     posts: List[Post] = []
 
-    # 1) NoticeView 링크를 우선적으로 수집 (가장 정확)
+    # 1) href에 NoticeView가 직접 들어있는 앵커만 수집
     for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
+        href = (a["href"] or "").strip()
         if "Notice/NoticeView" in href:
-            post = make_post_from_anchor(a, href)
-            if post:
-                posts.append(post)
+            p = make_post_from_anchor(a, href)
+            if p:
+                posts.append(p)
 
-    # 2) 그래도 없으면(혹시 모를 구조 변화 대비) 숫자 ID 패턴으로 보완
+    # 2) (보조) onclick 안에 seq_no 정보가 들어있는 경우 처리
+    #    (일부 사이트는 href가 '#'이고 onclick으로 상세로 이동)
     if not posts:
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip()
-            if "/Notice/" not in href:
+        for a in soup.find_all("a"):
+            onclick = a.get("onclick") or ""
+            seq = extract_seq_no_from_onclick(onclick)
+            if not seq:
                 continue
-            m = HREF_NUM_ID_PAT.search(href)
-            if not m:
-                continue
-            post = make_post_from_anchor(a, href)
-            if post:
-                posts.append(post)
+            # 상세 URL 구성
+            url = f"{BASE_URL}/Notice/NoticeView?seq_no={seq}"
+            title = a.get_text(strip=True) or url
+            date_text = guess_date_from_tr(a.find_parent("tr")) or guess_date_near(a)
+            posts.append(Post(id=seq, title=title, url=url, date=date_text))
 
-    # 중복 제거(같은 id 기준) 및 정렬
+    # ✅ ListView 등 다른 /Notice/ 링크는 더 이상 수집하지 않음 (카테고리 오탐 방지)
+
+    # 중복 제거 및 정렬
     unique: Dict[str, Post] = {}
     for p in posts:
         unique[p.id] = p
@@ -117,41 +117,33 @@ def parse_posts(html: str) -> List[Post]:
     return result
 
 def make_post_from_anchor(a, href: str) -> Optional[Post]:
-    """a 태그와 href에서 제목/URL/ID/날짜를 추출해 Post로 변환"""
     url = absolutize(href)
     pid = extract_post_id(url)
     if not pid:
         return None
-
-    title = a.get_text(strip=True)
-    if not title:
-        title = url  # 제목이 비어있으면 URL로 대체
-
-    # 날짜는 보통 같은 행(tr)이나 주변에 있음
+    title = a.get_text(strip=True) or url
     tr = a.find_parent("tr")
     date_text = guess_date_from_tr(tr) if tr else guess_date_near(a)
-
     return Post(id=pid, title=title, url=url, date=date_text)
 
 def extract_post_id(url: str) -> Optional[str]:
-    """URL에서 고유 ID 추출 로직
-       - 1순위: NoticeView?seq_no=... → seq_no 반환
-       - 2순위: /Notice/.../숫자  → 그 숫자
-       - 실패 시: None (해당 링크는 게시글이 아닐 가능성)
-    """
     parsed = urlparse(url)
-    # NoticeView?seq_no=...
     if parsed.path.lower().endswith("/notice/noticeview"):
         q = parse_qs(parsed.query)
-        seqs = q.get("seq_no") or q.get("seqNo") or q.get("seq")
-        if seqs and seqs[0]:
-            return seqs[0]
+        for key in ("seq_no", "seqNo", "seq"):
+            vals = q.get(key)
+            if vals and vals[0]:
+                return vals[0]
+    # (보조) /Notice/.../<숫자> 구조는 더 이상 사용하지 않음 (카테고리 혼입 방지)
+    return None
 
-    # 보완: /Notice/XXX/<숫자>
-    m = HREF_NUM_ID_PAT.search(parsed.path)
-    if m:
-        return m.group("id")
-
+def extract_seq_no_from_onclick(onclick: str) -> Optional[str]:
+    if not onclick:
+        return None
+    for pat in SEQ_FROM_ONCLICK_PATTERNS:
+        m = pat.search(onclick)
+        if m:
+            return m.group(1)
     return None
 
 def absolutize(href: str) -> str:
@@ -200,7 +192,7 @@ def safe_int(s: str) -> int:
     except Exception:
         return -1
 
-# ---------------------------- 상태 저장/로드 ----------------------------
+# ---------------------------- 상태/알림 ----------------------------
 
 def load_seen() -> Dict[str, Dict]:
     if STATE_FILE.exists():
@@ -214,8 +206,6 @@ def load_seen() -> Dict[str, Dict]:
 def save_seen(data: Dict[str, Dict]):
     with STATE_FILE.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-
-# ---------------------------- 알림 ----------------------------
 
 def notify_telegram(text: str):
     token = os.getenv("TG_BOT_TOKEN")
@@ -237,7 +227,7 @@ def format_post_lines(posts: List[Post], source_url: str) -> str:
         lines.append(f"- {p.title}{date}\n  {p.url}")
     return "\n".join(lines)
 
-# ---------------------------- 메인 로직 ----------------------------
+# ---------------------------- 메인 ----------------------------
 
 def fetch_list_html(session: requests.Session, url: str) -> str:
     r = session.get(url)
@@ -263,9 +253,8 @@ def main():
             html = fetch_list_html(session, list_url)
             posts = parse_posts(html)
             if not posts:
-                logging.warning("파싱 결과 없음: %s", list_url)
+                logging.info("NoticeView 형식 게시글을 찾지 못했습니다: %s", list_url)
                 continue
-
             new_posts = find_new_posts(posts, seen)
             if new_posts:
                 new_posts.sort(key=lambda p: safe_int(p.id), reverse=True)
