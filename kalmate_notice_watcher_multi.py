@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KALMATE Notice Watcher (multi-page, NoticeView 전용 파싱)
+KALMATE Notice Watcher (NoticeView 전용 + 첫 실행 알림)
 - 모니터링:
     - https://www.kalmate.com/Notice/ListView/1
     - https://www.kalmate.com/Notice/ListView/11
 - 새 글 감지 시 텔레그램 알림.
-- 핵심: NoticeView?seq_no=... 형태만 수집 (ListView 카테고리 링크는 무시)
+- 첫 실행 시(BASELINE 알림): 최신 글 스냅샷을 한 번 보내고 seen에 저장.
+
+환경변수:
+  TG_BOT_TOKEN, TG_CHAT_ID  (필수: 텔레그램 알림)
+  FIRST_RUN_NOTIFY          ("1"/"true"면 첫 실행 알림, 기본 True)
+  FIRST_RUN_TOP_N           (첫 실행에서 목록당 몇 개 보낼지, 기본 1)
 """
 
 import os
@@ -24,12 +29,21 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+# ---------------------------- 설정 ----------------------------
+
 BASE_URL = "https://www.kalmate.com"
 LIST_URLS = [
     f"{BASE_URL}/Notice/ListView/1",
     f"{BASE_URL}/Notice/ListView/11",
 ]
 STATE_FILE = Path(__file__).with_name("seen_posts.json")
+
+# 첫 실행에도 알림 보낼지 여부 & 몇 개 보낼지
+def _env_true(v: Optional[str]) -> bool:
+    return str(v).lower() in {"1", "true", "yes", "y", "on"}
+
+FIRST_RUN_NOTIFY = _env_true(os.getenv("FIRST_RUN_NOTIFY", "1"))
+FIRST_RUN_TOP_N = int(os.getenv("FIRST_RUN_TOP_N", "1"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,12 +55,16 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 }
 
+# ---------------------------- 데이터 구조 ----------------------------
+
 @dataclass(frozen=True)
 class Post:
     id: str            # seq_no 등 고유 식별자
     title: str
     url: str
     date: Optional[str] = None  # YYYY-MM-DD
+
+# ---------------------------- HTTP 유틸 ----------------------------
 
 def make_session(timeout: int = 15) -> requests.Session:
     session = requests.Session()
@@ -71,13 +89,12 @@ def _with_timeout(fn, *, timeout: int):
     return wrapper
 
 # ---------------------------- 파싱 ----------------------------
-
-# NoticeView 링크의 seq_no를 최우선으로 추출
+# NoticeView?seq_no=... 형태만 수집 (ListView 같은 카테고리 링크는 무시)
 HREF_NUM_ID_PAT = re.compile(r"/Notice/(?:View|Detail|Read|ListView)/(?P<id>\d+)", re.I)
 SEQ_FROM_ONCLICK_PATTERNS = [
     re.compile(r"seq_no\s*=\s*['\"]?(\d+)", re.I),
     re.compile(r"NoticeView\?seq_no=(\d+)", re.I),
-    re.compile(r"\(\s*(\d{6,})\s*\)"),  # 함수콜 형식에서 숫자 인자만 있을 때
+    re.compile(r"\(\s*(\d{6,})\s*\)"),
 ]
 
 def parse_posts(html: str) -> List[Post]:
@@ -92,21 +109,17 @@ def parse_posts(html: str) -> List[Post]:
             if p:
                 posts.append(p)
 
-    # 2) (보조) onclick 안에 seq_no 정보가 들어있는 경우 처리
-    #    (일부 사이트는 href가 '#'이고 onclick으로 상세로 이동)
+    # 2) onclick에 seq_no가 있는 경우(보조)
     if not posts:
         for a in soup.find_all("a"):
             onclick = a.get("onclick") or ""
             seq = extract_seq_no_from_onclick(onclick)
             if not seq:
                 continue
-            # 상세 URL 구성
             url = f"{BASE_URL}/Notice/NoticeView?seq_no={seq}"
             title = a.get_text(strip=True) or url
             date_text = guess_date_from_tr(a.find_parent("tr")) or guess_date_near(a)
             posts.append(Post(id=seq, title=title, url=url, date=date_text))
-
-    # ✅ ListView 등 다른 /Notice/ 링크는 더 이상 수집하지 않음 (카테고리 오탐 방지)
 
     # 중복 제거 및 정렬
     unique: Dict[str, Post] = {}
@@ -134,8 +147,7 @@ def extract_post_id(url: str) -> Optional[str]:
             vals = q.get(key)
             if vals and vals[0]:
                 return vals[0]
-    # (보조) /Notice/.../<숫자> 구조는 더 이상 사용하지 않음 (카테고리 혼입 방지)
-    return None
+    return None  # 카테고리/기타 링크는 배제
 
 def extract_seq_no_from_onclick(onclick: str) -> Optional[str]:
     if not onclick:
@@ -245,8 +257,14 @@ def update_seen(seen_map: Dict[str, Dict], posts: List[Post]):
 def main():
     session = make_session()
     seen = load_seen()
+    is_first_run = (not STATE_FILE.exists()) or (not seen)
+
     total_new = 0
     all_new_lines: List[str] = []
+
+    # 첫 실행이라면 목록당 최신 N개를 취합
+    baseline_blocks: List[str] = []
+    baseline_posts: List[Post] = []
 
     for list_url in LIST_URLS:
         try:
@@ -255,15 +273,32 @@ def main():
             if not posts:
                 logging.info("NoticeView 형식 게시글을 찾지 못했습니다: %s", list_url)
                 continue
-            new_posts = find_new_posts(posts, seen)
-            if new_posts:
-                new_posts.sort(key=lambda p: safe_int(p.id), reverse=True)
-                all_new_lines.append(format_post_lines(new_posts, list_url))
-                update_seen(seen, new_posts)
-                total_new += len(new_posts)
+
+            if is_first_run and FIRST_RUN_NOTIFY:
+                topn = posts[:max(1, FIRST_RUN_TOP_N)]
+                baseline_blocks.append(format_post_lines(topn, list_url))
+                baseline_posts.extend(topn)
+            else:
+                new_posts = find_new_posts(posts, seen)
+                if new_posts:
+                    new_posts.sort(key=lambda p: safe_int(p.id), reverse=True)
+                    all_new_lines.append(format_post_lines(new_posts, list_url))
+                    update_seen(seen, new_posts)
+                    total_new += len(new_posts)
         except Exception:
             logging.exception("목록 처리 중 오류: %s", list_url)
 
+    # 첫 실행 알림
+    if is_first_run and FIRST_RUN_NOTIFY and baseline_blocks:
+        text = "KALMATE 공지 BASELINE 스냅샷\n\n" + "\n\n".join(baseline_blocks)
+        notify_telegram(text)
+        # 베이스라인도 seen에 저장 (이후부터는 새 글만 알림)
+        update_seen(seen, baseline_posts)
+        save_seen(seen)
+        logging.info("첫 실행 베이스라인 %d건 전송 완료", len(baseline_posts))
+        return
+
+    # 평소 모드: 새 글이 있다면 알림
     if total_new > 0:
         text = f"KALMATE 공지 새 글 알림 ({total_new}건)\n\n" + "\n\n".join(all_new_lines)
         notify_telegram(text)
