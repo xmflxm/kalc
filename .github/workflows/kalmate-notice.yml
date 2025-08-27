@@ -43,9 +43,9 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
           set -e
-          SCRIPT_PATH=$(git ls-files | grep -E '^(.*/)?kalmate_notice_watcher_pro\.py$' | head -n1 || true)
+          SCRIPT_PATH=$(git ls-files | grep -E '^(.*/)?kalmate_notice_watcher_multi\.py$' | head -n1 || true)
           if [ -z "$SCRIPT_PATH" ]; then
-            echo "❌ kalmate_notice_watcher_pro.py not found in repo. Check filename/location/branch."
+            echo "❌ kalmate_notice_watcher_multi.py not found in repo. Check filename/location/branch."
             echo "Files in repo:"
             ls -la
             exit 1
