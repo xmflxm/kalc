@@ -16,14 +16,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # 기본 브랜치가 main이 아니라면 ref를 지정하세요 (예: "master" 또는 사용 중인 브랜치)
+          # ref: main
 
-      # 🔍 여기서 현재 위치/파일 리스트 확인
       - name: Show working directory & list files
         run: |
           pwd
+          echo "---- top level ----"
           ls -la
-          echo "---- recursive list ----"
-          ls -R
+          echo "---- find python files ----"
+          find . -maxdepth 3 -type f -name "*.py" -print
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,13 +37,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4
 
-      - name: Run watcher
+      - name: Run watcher (auto-discover script path)
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
-          # 👉 루트에 있다면 이 경로가 맞습니다.
-          python ./kalmate_notice_watcher_pro.py
+          set -e
+          SCRIPT_PATH=$(git ls-files | grep -E '^(.*/)?kalmate_notice_watcher_pro\.py$' | head -n1 || true)
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "❌ kalmate_notice_watcher_pro.py not found in repo. Check filename/location/branch."
+            echo "Files in repo:"
+            ls -la
+            exit 1
+          fi
+          echo "✅ Running: $SCRIPT_PATH"
+          python "$SCRIPT_PATH"
 
       - name: Commit & push state if changed
         run: |
