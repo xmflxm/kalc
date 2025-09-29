@@ -25,7 +25,7 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -108,7 +108,6 @@ def try_login(page) -> bool:
     return False
 
 def dismiss_banners(page):
-    # 자주 보이는 동의/닫기 버튼들 시도
     labels = ["동의", "확인", "닫기", "Accept", "Agree", "OK"]
     for txt in labels:
         try:
@@ -146,13 +145,11 @@ def extract_posts_via_dom(page) -> List[Post]:
     posts: List[Post] = []
 
     sel = 'a[href*="/service/usage/bulletin/"]'
-    # 첫 로딩 대기
     try:
         page.wait_for_selector(sel, timeout=15000)
     except PWTimeout:
         pass
 
-    # 스크롤 다운 한 번(지연 로딩 대비)
     try:
         page.mouse.wheel(0, 2000)
         page.wait_for_timeout(500)
@@ -170,13 +167,11 @@ def extract_posts_via_dom(page) -> List[Post]:
             continue
         if not href or len(title) < 3:
             continue
-        # 목록 루트(/.../bulletin) 제외
         full = absolutize(base, href)
         if full.rstrip("/").endswith("/service/usage/bulletin"):
             continue
         if not DETAIL_PATH_PAT.search(href):
             continue
-        # 날짜 힌트(부모 텍스트)
         date_hint = None
         try:
             parent_txt = a.evaluate("el => el.closest('li, tr, article, div')?.innerText || ''")
@@ -185,7 +180,6 @@ def extract_posts_via_dom(page) -> List[Post]:
             pass
         posts.append(Post(title=title, url=full, date=date_hint))
 
-    # 중복 제거
     seen = set()
     out: List[Post] = []
     for p in posts:
@@ -218,7 +212,6 @@ def extract_posts_via_html(html: str, base: str) -> List[Post]:
         posts.append(Post(text, full))
         if len(posts) >= MAX_ITEMS:
             break
-    # 중복 제거
     seen = set()
     out: List[Post] = []
     for p in posts:
@@ -252,7 +245,6 @@ def main():
             java_script_enabled=True,
             viewport={"width": 1366, "height": 900},
         )
-        # Accept-Language 헤더
         context.set_extra_http_headers({"Accept-Language": "ko,en;q=0.9"})
         page = context.new_page()
 
@@ -266,7 +258,6 @@ def main():
 
         posts = extract_posts_via_dom(page)
 
-        # DOM으로 못 찾으면 HTML 파싱으로 재시도
         if not posts:
             try:
                 html = page.content()
@@ -274,7 +265,6 @@ def main():
             except Exception:
                 posts = []
 
-        # 그래도 없으면 requests로 최후 재시도(SSR 대응)
         if not posts:
             try:
                 resp = requests.get(START_URL, headers={"User-Agent": UA, "Accept-Language": "ko"}, timeout=15)
@@ -286,4 +276,32 @@ def main():
         browser.close()
 
     if not posts:
-        logging.in
+        logging.info("게시글을 찾지 못했습니다.")
+        return
+
+    if want_snapshot:
+        topn = posts[:SNAPSHOT_TOP_N]
+        text = "KAL Agent 스냅샷 (최신 10건)\n\n" + format_posts(topn)
+        notify_telegram(text)
+        now = int(time.time())
+        for p in posts:
+            seen[p.id] = {"title": p.title, "url": p.url, "date": p.date, "ts": now}
+        save_seen(seen)
+        BASELINE_FLAG.write_text("done", encoding="utf-8")
+        logging.info("스냅샷 전송 및 상태 파일 생성 완료")
+        return
+
+    new_posts = [p for p in posts if p.id not in seen]
+    if new_posts:
+        msg = f"KAL Agent 새 글 알림 ({len(new_posts)}건)\n\n" + format_posts(new_posts)
+        notify_telegram(msg)
+        now = int(time.time())
+        for p in new_posts:
+            seen[p.id] = {"title": p.title, "url": p.url, "date": p.date, "ts": now}
+        save_seen(seen)
+        logging.info("새 글 %d건 전송/저장 완료", len(new_posts))
+    else:
+        logging.info("새 글 없음")
+
+if __name__ == "__main__":
+    main()
