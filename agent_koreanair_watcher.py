@@ -1,25 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Korean Air Agent bulletin watcher (강화판 + 디버그 핑)
+Korean Air Agent bulletin watcher (프레임 지원 + 디버그)
 - 대상: https://agent.koreanair.com/service/usage/bulletin
 - 동작:
-  1) Playwright(Chromium)으로 접속, 배너/팝업 닫기
-  2) 상세 글 링크만 수집: /service/usage/bulletin/<id or slug> 또는 ?query 형태
-     (목록 루트 /service/usage/bulletin 은 제외)
-  3) 최초 1회 스냅샷(최신 10건) 전송 → 상태 파일 커밋
-  4) 이후엔 새 글만 전송
-  5) 실패 시 HTML 파싱/requests Fallback
-  6) 디버그 모드: 단계별 텔레그램 핑, 캡처 HTML 저장(/tmp/kal_page.html)
-
-ENV(Secrets 권장):
-  TG_BOT_TOKEN, TG_CHAT_ID
-  START_URL (기본: https://agent.koreanair.com/service/usage/bulletin)
-  SNAPSHOT_TOP_N (기본 10), MAX_ITEMS(기본 60)
-  KAL_USER, KAL_PASS  # 로그인 필요 시(보통 불필요)
-  STARTUP_PING=1  # 실행 단계별 텔레그램 핑
-  FORCE_SNAPSHOT=1  # 상태파일 있어도 스냅샷 강제 1회
-  DEBUG_HTML=1  # /tmp/kal_page.html 저장
+  1) Playwright(Chromium) 접속 → 배너/팝업 닫기
+  2) 모든 프레임(iframe 포함)을 순회하며 상세글 링크 수집
+     - 허용: /service/usage/bulletin/<slug|id> 또는 ?query
+     - 제외: 정확한 목록 루트(/service/usage/bulletin)
+  3) 최초 1회 스냅샷(최신 10건) 전송 → 상태파일 커밋
+  4) 이후 새 글만 전송
+  5) 디버그: 실행 단계 핑(Telegram), 각 프레임 HTML/스크린샷 저장(/tmp)
 """
 
 import os
@@ -33,7 +24,7 @@ from typing import List, Dict, Optional
 from urllib.parse import urljoin, urlparse
 
 import requests
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout, Frame
 
 # ---------- 설정/상태 ----------
 STATE_FILE = Path(__file__).with_name("seen_posts.json")
@@ -77,7 +68,6 @@ def notify_telegram(text: str):
     if r.status_code != 200:
         logging.warning("텔레그램 전송 실패: %s %s", r.status_code, r.text)
 
-# 디버그용 간단 핑
 def tg_ping(text: str):
     try:
         token = os.getenv("TG_BOT_TOKEN")
@@ -102,76 +92,6 @@ def load_seen() -> Dict[str, Dict]:
 
 def save_seen(seen: Dict[str, Dict]):
     STATE_FILE.write_text(json.dumps(seen, ensure_ascii=False, indent=2), encoding="utf-8")
-
-# ---------- 로그인 & 배너 제거 ----------
-def try_login(page) -> bool:
-    user = os.getenv("KAL_USER")
-    pwd = os.getenv("KAL_PASS")
-    if not (user and pwd):
-        logging.info("로그인 정보 미제공 → 비로그인으로 시도")
-        return False
-
-    # 0) 보이는 '로그인' 링크/버튼이 있으면 눌러서 폼 노출
-    try:
-        for txt in ["로그인", "Sign in", "Sign In", "Login"]:
-            loc = page.locator(f'a:has-text("{txt}"), button:has-text("{txt}")')
-            if loc.count() > 0:
-                loc.first.click(timeout=2000)
-                page.wait_for_load_state("networkidle", timeout=6000)
-                break
-    except Exception:
-        pass
-
-    # 1) 흔한 로그인 URL 시도
-    login_urls = [
-        "https://agent.koreanair.com/login",
-        "https://agent.koreanair.com/auth/login",
-        "https://agent.koreanair.com/user/login",
-    ]
-    for u in login_urls:
-        try:
-            page.goto(u, wait_until="domcontentloaded", timeout=10000)
-            page.wait_for_load_state("networkidle", timeout=4000)
-            if "login" not in page.url.lower():
-                break
-        except Exception:
-            continue
-
-    # 2) 폼 입력/제출
-    candidates = [
-        {"user": 'input[name="username"]', "pass": 'input[name="password"]', "submit": 'button[type="submit"]'},
-        {"user": '#username', "pass": '#password', "submit": 'button[type="submit"]'},
-        {"user": 'input[type="email"]', "pass": 'input[type="password"]', "submit": 'button[type="submit"]'},
-        {"user": 'input[name="userId"]', "pass": 'input[name="userPwd"]', "submit": 'button, input[type="submit"]'},
-    ]
-    logged_in = False
-    for c in candidates:
-        try:
-            page.wait_for_selector(c["user"], timeout=2000)
-            page.fill(c["user"], user)
-            page.fill(c["pass"], pwd)
-            page.click(c["submit"])
-            page.wait_for_load_state("networkidle", timeout=8000)
-            logged_in = True
-            break
-        except Exception:
-            continue
-
-    # 3) 성공 판정(로그아웃/프로필 표시 등)
-    if logged_in:
-        try:
-            ok = False
-            for txt in ["로그아웃", "Log out", "Logout", "마이페이지", "프로필", "Profile", "My"]:
-                if page.locator(f'text="{txt}"').count() > 0:
-                    ok = True
-                    break
-            logging.info("로그인 시도 결과: %s", "성공 추정" if ok else "성공 여부 불명")
-            return ok or True
-        except Exception:
-            return True
-
-    logging.info("로그인 시도 실패 또는 폼 미탐지")
-    return False
 
 def dismiss_banners(page):
     labels = ["동의", "확인", "닫기", "Accept", "Agree", "OK"]
@@ -201,24 +121,22 @@ def extract_date_near(text: str) -> Optional[str]:
                 pass
     return None
 
-# ---------- 목록 추출 ----------
-def extract_posts_via_dom(page) -> List[Post]:
-    base = page.url
+# ---------- 프레임 단위 추출 ----------
+def extract_posts_in_frame(frame: Frame, idx: int, save_debug: bool) -> List[Post]:
+    """
+    주어진 frame에서 상세 링크만 수집.
+    필요 시 frame HTML/스크린샷을 /tmp 에 저장.
+    """
+    base = frame.url
     posts: List[Post] = []
 
     sel = 'a[href*="/service/usage/bulletin"]'
     try:
-        page.wait_for_selector(sel, timeout=15000)
+        frame.wait_for_selector(sel, timeout=5000)
     except PWTimeout:
         pass
 
-    try:
-        page.mouse.wheel(0, 2000)
-        page.wait_for_timeout(500)
-    except Exception:
-        pass
-
-    anchors = page.locator(sel)
+    anchors = frame.locator(sel)
     count = anchors.count()
     for i in range(min(count, MAX_ITEMS)):
         a = anchors.nth(i)
@@ -229,20 +147,38 @@ def extract_posts_via_dom(page) -> List[Post]:
             continue
         if not href or len(title) < 3:
             continue
+
         full = absolutize(base, href)
         path = urlparse(full).path
         if BULLETIN_ROOT.search(path):
             continue
         if not BULLETIN_LINK_OK.search(full):
             continue
+
         date_hint = None
         try:
             parent_txt = a.evaluate("el => el.closest('li, tr, article, div')?.innerText || ''")
             date_hint = extract_date_near(parent_txt)
         except Exception:
             pass
+
         posts.append(Post(title=title, url=full, date=date_hint))
 
+    # 디버그 저장
+    if save_debug:
+        try:
+            html = frame.content()
+            Path(f"/tmp/kal_frame_{idx}.html").write_text(html, encoding="utf-8")
+            # 스크린샷은 프레임 기준으로 바로 찍기 어려워 페이지에서 찍는 게 보통이지만,
+            # 여기서는 frame.screenshot()이 가능하면 저장, 실패 시 무시
+            try:
+                frame.screenshot(path=f"/tmp/kal_frame_{idx}.png")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # 중복 제거
     seen = set()
     out: List[Post] = []
     for p in posts:
@@ -252,37 +188,6 @@ def extract_posts_via_dom(page) -> List[Post]:
         out.append(p)
         if len(out) >= MAX_ITEMS:
             break
-    return out
-
-ANCHOR_RE = re.compile(
-    r'<a[^>]+href=["\'](?P<href>[^"\']*/service/usage/bulletin[^"\']*)["\'][^>]*>(?P<text>.*?)</a>',
-    re.I | re.S
-)
-TAG_STRIP_RE = re.compile(r"<[^>]+>")
-
-def extract_posts_via_html(html: str, base: str) -> List[Post]:
-    posts: List[Post] = []
-    for m in ANCHOR_RE.finditer(html or ""):
-        href = m.group("href")
-        text = TAG_STRIP_RE.sub("", m.group("text")).strip()
-        if not href or not text:
-            continue
-        full = absolutize(base, href)
-        path = urlparse(full).path
-        if BULLETIN_ROOT.search(path):
-            continue
-        if not BULLETIN_LINK_OK.search(full):
-            continue
-        posts.append(Post(text, full))
-        if len(posts) >= MAX_ITEMS:
-            break
-    seen = set()
-    out: List[Post] = []
-    for p in posts:
-        if p.id in seen:
-            continue
-        seen.add(p.id)
-        out.append(p)
     return out
 
 def format_posts(posts: List[Post]) -> str:
@@ -328,62 +233,42 @@ def main():
             pass
         dismiss_banners(page)
 
-        # 1차: DOM 추출
-        posts = extract_posts_via_dom(page)
-        logging.info("DOM anchors: %d", len(posts))
-        if STARTUP_PING:
-            tg_ping(f"ℹ️ DOM 추출: {len(posts)}건")
-
-        # 필요 시 로그인 시도 후 목록으로 복귀 → 재추출
-        if not posts and os.getenv("KAL_USER") and os.getenv("KAL_PASS"):
-            try_login(page)
-            try:
-                page.goto(START_URL, wait_until="domcontentloaded", timeout=20000)
-                page.wait_for_load_state("networkidle", timeout=6000)
-            except Exception:
-                pass
-            posts = extract_posts_via_dom(page)
-            logging.info("DOM anchors(after login): %d", len(posts))
-            if STARTUP_PING:
-                tg_ping(f"ℹ️ 로그인 후 DOM: {len(posts)}건")
-
-        # HTML 저장(옵션)
+        # 페이지 자체 스크린샷(디버그)
         if DEBUG_HTML:
             try:
-                with open("/tmp/kal_page.html", "w", encoding="utf-8") as f:
-                    f.write(page.content())
+                page.screenshot(path="/tmp/kal_page.png", full_page=True)
+                Path("/tmp/kal_page.html").write_text(page.content(), encoding="utf-8")
             except Exception:
                 pass
 
-        # 2차: HTML 파싱
-        if not posts:
+        # === 모든 프레임 순회 ===
+        posts: List[Post] = []
+        frames = page.frames
+        logging.info("frames: %d", len(frames))
+        for i, fr in enumerate(frames):
             try:
-                html = page.content()
-                posts = extract_posts_via_html(html, page.url)
-                logging.info("HTML parse fallback: %d", len(posts))
-                if STARTUP_PING:
-                    tg_ping(f"ℹ️ HTML 파싱: {len(posts)}건")
+                sub = extract_posts_in_frame(fr, i, DEBUG_HTML)
+                posts.extend(sub)
             except Exception:
-                posts = []
+                continue
 
-        # 3차: requests 파싱
-        if not posts:
-            try:
-                resp = requests.get(START_URL, headers={"User-Agent": UA, "Accept-Language": "ko"}, timeout=15)
-                if resp.ok:
-                    posts = extract_posts_via_html(resp.text, START_URL)
-                    logging.info("requests fallback: %d", len(posts))
-                    if STARTUP_PING:
-                        tg_ping(f"ℹ️ requests 파싱: {len(posts)}건 (status {resp.status_code})")
-            except Exception:
-                pass
+        # 중복 제거(최종)
+        uniq = {}
+        for p in posts:
+            if p.id not in uniq:
+                uniq[p.id] = p
+        posts = list(uniq.values())
+
+        logging.info("ALL frames collected: %d", len(posts))
+        if STARTUP_PING:
+            tg_ping(f"ℹ️ 프레임 합계: {len(posts)}건")
 
         browser.close()
 
     if not posts:
         logging.info("게시글을 찾지 못했습니다.")
         if STARTUP_PING:
-            tg_ping("❗ 게시글을 찾지 못했습니다. (로그 확인 필요)")
+            tg_ping("❗ 게시글을 찾지 못했습니다. (로그/아티팩트 확인)")
         return
 
     # 최초 1회 스냅샷
