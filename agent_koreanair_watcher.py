@@ -30,6 +30,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
+DETAIL_PATH_PAT = re.compile(r"/service/usage/bulletin/(?!$)[^?#/][^?#]*", re.I)
+
 # 상태 파일(레포 루트에 생성 → 커밋되어야 함)
 STATE_FILE = Path(__file__).with_name("seen_posts.json")
 BASELINE_FLAG = Path(__file__).with_name(".kal_baseline_done")
@@ -132,19 +134,20 @@ def extract_date_near(text: str) -> Optional[str]:
 
 def extract_posts(page) -> List[Post]:
     """
-    /service/usage/bulletin/xxxx 형식의 상세 링크만 수집.
-    최신이 상단이라고 가정 → 보이는 순서 그대로 가져옴.
+    /service/usage/bulletin/뒤에 슬러그가 붙은 상세 링크만 수집.
+    (예: /service/usage/bulletin/12345, /service/usage/bulletin/w25-dom-... 등)
+    최신이 상단이라고 가정 → 보이는 순서대로 가져옴.
     """
     base = page.url
     posts: List[Post] = []
 
-    # 1) 게시판 컨테이너(클래스명에 bulletin/board/list 등) 우선 검색
+    # 게시판 컨테이너 우선 탐색
     containers = page.query_selector_all(
-        'section[class*="bulletin"], div[class*="bulletin"], main[class*="bulletin"], '
-        'section[class*="board"], div[class*="board"], ul[class*="list"], ol[class*="list"]'
+        'main, section, article, div, ul, ol'
+        '[class*="bulletin"], main[class*="board"], section[class*="board"], div[class*="board"], ul[class*="list"], ol[class*="list"]'
     )
     if not containers:
-        containers = page.query_selector_all("main, section, article, div")
+        containers = page.query_selector_all("main, section, article, div, ul, ol")
 
     def add_from_anchors(anchors):
         for a in anchors:
@@ -155,15 +158,20 @@ def extract_posts(page) -> List[Post]:
                 continue
             if not href or len(title) < 3:
                 continue
-            # 상세 글 링크만: /service/usage/bulletin/... 포함
-            if "/service/usage/bulletin" not in href:
+
+            # 목록(루트) 제외, 상세만 통과
+            # - 정확히 /service/usage/bulletin 만 가리키는 링크는 제외
+            path = href.split("://", 1)[-1]  # 절대/상대 모두 커버
+            if href.rstrip("/").endswith("/service/usage/bulletin"):
                 continue
+            if not DETAIL_PATH_PAT.search(href):
+                continue
+
             full = absolutize(base, href)
-            # 같은 페이지 내 앵커/자바스크립트 링크 제외
             if full.lower().startswith("javascript:"):
                 continue
 
-            # 날짜 힌트(부모/근처 텍스트에서)
+            # 날짜 힌트(부모에서 추출: li/tr/article 등)
             date_hint = None
             try:
                 parent_txt = a.evaluate("el => el.closest('li, tr, article, div')?.innerText || ''")
@@ -173,13 +181,18 @@ def extract_posts(page) -> List[Post]:
 
             posts.append(Post(title=title, url=full, date=date_hint))
 
+    # 컨테이너 내 a 태그 우선
     for c in containers:
-        anchors = c.query_selector_all("a")
+        anchors = c.query_selector_all("a[href]")
         add_from_anchors(anchors)
         if len(posts) >= MAX_ITEMS:
             break
 
-    # 중복 제거: url 기준
+    # Fallback: 페이지 전체 a[href]에서 한 번 더 시도
+    if len(posts) < 3:
+        add_from_anchors(page.query_selector_all("a[href]"))
+
+    # 중복 제거(상단 우선 유지)
     seen = set()
     deduped: List[Post] = []
     for p in posts:
