@@ -32,17 +32,31 @@ jobs:
           pip install playwright requests
           python -m playwright install chromium
 
-      - name: Run watcher
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          START_URL: "https://agent.koreanair.com/service/usage/bulletin"
-          # 로그인 필요하면 아래 2개도 Secrets로 추가하고 주석 해제
-          # KAL_USER: ${{ secrets.KAL_USER }}
-          # KAL_PASS: ${{ secrets.KAL_PASS }}
-        run: |
-          python agent_koreanair_watcher.py
+- name: Run watcher
+  env:
+    TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+    TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+    START_URL: "https://agent.koreanair.com/service/usage/bulletin"
+    # 💡 디버그 임시 ON
+    STARTUP_PING: "1"
+    DEBUG_HTML: "1"
+    # 필요하면 스냅샷 강제 1회
+    # FORCE_SNAPSHOT: "1"
+    # 로그인 필요 시:
+    # KAL_USER: ${{ secrets.KAL_USER }}
+    # KAL_PASS: ${{ secrets.KAL_PASS }}
+  run: |
+    python agent_koreanair_watcher.py
 
+    - name: Upload captured HTML (debug)
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: kal-page
+    path: /tmp/kal_page.html
+    if-no-files-found: ignore
+
+    
       - name: Commit & push state if changed
         run: |
           git config user.name "github-actions[bot]"
