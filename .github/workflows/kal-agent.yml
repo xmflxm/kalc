@@ -37,12 +37,14 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           START_URL: "https://agent.koreanair.com/service/usage/bulletin"
-          # 디버그(임시): 실행 상태를 텔레그램으로 핑
+          # 디버그(임시): 실행 상태를 텔레그램으로 핑/HTML 저장
           STARTUP_PING: "1"
           DEBUG_HTML: "1"
-          # 필요시 로그인
+          # 필요 시 로그인
           # KAL_USER: ${{ secrets.KAL_USER }}
           # KAL_PASS: ${{ secrets.KAL_PASS }}
+          # 스냅샷 강제 1회 원하면(임시로만 사용)
+          # FORCE_SNAPSHOT: "1"
         run: |
           python agent_koreanair_watcher.py
 
