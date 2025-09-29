@@ -231,7 +231,15 @@ def format_posts(posts: List[Post]) -> str:
 # ---------- 메인 ----------
 def main():
     seen = load_seen()
-    want_snapshot = (not BASELINE_FLAG.exists())
+      # 🔧 디버그 플래그
+    STARTUP_PING = os.getenv("STARTUP_PING", "0").lower() in {"1", "true", "yes"}
+    FORCE_SNAPSHOT = os.getenv("FORCE_SNAPSHOT", "0").lower() in {"1", "true", "yes"}
+    DEBUG_HTML = os.getenv("DEBUG_HTML", "0").lower() in {"1", "true", "yes"}
+
+    if STARTUP_PING:
+        tg_ping("▶️ KAL Agent watcher 시작: " + os.getenv("START_URL", "N/A"))
+
+      want_snapshot = (not BASELINE_FLAG.exists()) or FORCE_SNAPSHOT
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
@@ -256,28 +264,48 @@ def main():
             pass
         dismiss_banners(page)
 
-        posts = extract_posts_via_dom(page)
+posts = extract_posts_via_dom(page)
+logging.info("DOM anchors: %d", len(posts))
+if STARTUP_PING:
+    tg_ping(f"ℹ️ DOM 추출: {len(posts)}건")
 
-        if not posts:
-            try:
-                html = page.content()
-                posts = extract_posts_via_html(html, page.url)
-            except Exception:
-                posts = []
+# 필요 시 HTML 저장 (DEBUG_HTML=1일 때)
+if DEBUG_HTML:
+    try:
+        html = page.content()
+        with open("/tmp/kal_page.html", "w", encoding="utf-8") as f:
+            f.write(html)
+    except Exception:
+        pass
 
-        if not posts:
-            try:
-                resp = requests.get(START_URL, headers={"User-Agent": UA, "Accept-Language": "ko"}, timeout=15)
-                if resp.ok:
-                    posts = extract_posts_via_html(resp.text, START_URL)
-            except Exception:
-                pass
+if not posts:
+    try:
+        html = page.content()
+        posts = extract_posts_via_html(html, page.url)
+        logging.info("HTML parse fallback: %d", len(posts))
+        if STARTUP_PING:
+            tg_ping(f"ℹ️ HTML 파싱: {len(posts)}건")
+    except Exception:
+        posts = []
+
+if not posts:
+    try:
+        resp = requests.get(START_URL, headers={"User-Agent": UA, "Accept-Language": "ko"}, timeout=15)
+        if resp.ok:
+            posts = extract_posts_via_html(resp.text, START_URL)
+            logging.info("requests fallback: %d", len(posts))
+            if STARTUP_PING:
+                tg_ping(f"ℹ️ requests 파싱: {len(posts)}건 (status {resp.status_code})")
+    except Exception:
+        pass
 
         browser.close()
 
-    if not posts:
-        logging.info("게시글을 찾지 못했습니다.")
-        return
+if not posts:
+    logging.info("게시글을 찾지 못했습니다.")
+    if STARTUP_PING:
+        tg_ping("❗ 게시글을 찾지 못했습니다. (로그 확인 필요)")
+    return
 
     if want_snapshot:
         topn = posts[:SNAPSHOT_TOP_N]
@@ -305,3 +333,15 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# 텔레그램 간단 핑
+def tg_ping(text: str):
+    try:
+        token = os.getenv("TG_BOT_TOKEN")
+        chat_id = os.getenv("TG_CHAT_ID")
+        if not (token and chat_id):
+            return
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                      data={"chat_id": chat_id, "text": text}, timeout=10)
+    except Exception:
+        pass
