@@ -1234,5 +1234,11 @@
     "url": "https://www.kalmate.com/Notice/NoticeView?seq_no=20250168&listcategory=11",
     "date": "2025-02-04",
     "ts": 1756960808
+  },
+  "https://agent.koreanair.com/service/usage/bulletin": {
+    "title": "서비스 이용",
+    "url": "https://agent.koreanair.com/service/usage/bulletin",
+    "date": null,
+    "ts": 1759112568
   }
 }
