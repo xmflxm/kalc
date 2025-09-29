@@ -4,21 +4,21 @@
 Korean Air Agent bulletin watcher (강화판 + 디버그 핑)
 - 대상: https://agent.koreanair.com/service/usage/bulletin
 - 동작:
-  1) Playwright로 진입(ko-KR, Asia/Seoul, 커스텀 UA) → 배너/팝업 자동 닫기
-  2) 상세글 링크만 수집: a[href*="/service/usage/bulletin/"] 이면서
-     정확히 .../bulletin 으로 끝나는 목록 루트 링크는 제외
-  3) 최초 1회 스냅샷(최신 10건) → 상태 파일 커밋 전제
-  4) 이후엔 새 글만 알림
-  5) 실패 시 HTML 정규식 Fallback (page.content() → requests.get())
-  6) 디버그 모드: 단계별 텔레그램 핑, 캡처 HTML 업로드
+  1) Playwright(Chromium)으로 접속, 배너/팝업 닫기
+  2) 상세 글 링크만 수집: /service/usage/bulletin/<id or slug> 또는 ?query 형태
+     (목록 루트 /service/usage/bulletin 은 제외)
+  3) 최초 1회 스냅샷(최신 10건) 전송 → 상태 파일 커밋
+  4) 이후엔 새 글만 전송
+  5) 실패 시 HTML 파싱/requests Fallback
+  6) 디버그 모드: 단계별 텔레그램 핑, 캡처 HTML 저장(/tmp/kal_page.html)
 
 ENV(Secrets 권장):
   TG_BOT_TOKEN, TG_CHAT_ID
   START_URL (기본: https://agent.koreanair.com/service/usage/bulletin)
   SNAPSHOT_TOP_N (기본 10), MAX_ITEMS(기본 60)
-  KAL_USER, KAL_PASS  # 로그인 필요 시
-  STARTUP_PING=1  # 실행 단계별 핑
-  FORCE_SNAPSHOT=1  # 상태파일 있어도 스냅샷 1회 강제
+  KAL_USER, KAL_PASS  # 로그인 필요 시(보통 불필요)
+  STARTUP_PING=1  # 실행 단계별 텔레그램 핑
+  FORCE_SNAPSHOT=1  # 상태파일 있어도 스냅샷 강제 1회
   DEBUG_HTML=1  # /tmp/kal_page.html 저장
 """
 
@@ -30,7 +30,7 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -48,7 +48,9 @@ SNAPSHOT_TOP_N = int(os.getenv("SNAPSHOT_TOP_N", "10"))
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
-DETAIL_PATH_PAT = re.compile(r"/service/usage/bulletin/(?!$)[^?#/][^?#]*", re.I)
+# 상세글 허용(슬러그 또는 ?쿼리), 목록 루트 제외
+BULLETIN_LINK_OK = re.compile(r"/service/usage/bulletin(?:/[^?#]+|\?[^#]+)", re.I)
+BULLETIN_ROOT = re.compile(r"^/service/usage/bulletin/?$", re.I)
 
 # ---------- 유틸 ----------
 class Post:
@@ -75,7 +77,7 @@ def notify_telegram(text: str):
     if r.status_code != 200:
         logging.warning("텔레그램 전송 실패: %s %s", r.status_code, r.text)
 
-# 🔧 텔레그램 간단 핑(디버그용)
+# 디버그용 간단 핑
 def tg_ping(text: str):
     try:
         token = os.getenv("TG_BOT_TOKEN")
@@ -108,23 +110,67 @@ def try_login(page) -> bool:
     if not (user and pwd):
         logging.info("로그인 정보 미제공 → 비로그인으로 시도")
         return False
-    cands = [
+
+    # 0) 보이는 '로그인' 링크/버튼이 있으면 눌러서 폼 노출
+    try:
+        for txt in ["로그인", "Sign in", "Sign In", "Login"]:
+            loc = page.locator(f'a:has-text("{txt}"), button:has-text("{txt}")')
+            if loc.count() > 0:
+                loc.first.click(timeout=2000)
+                page.wait_for_load_state("networkidle", timeout=6000)
+                break
+    except Exception:
+        pass
+
+    # 1) 흔한 로그인 URL 시도
+    login_urls = [
+        "https://agent.koreanair.com/login",
+        "https://agent.koreanair.com/auth/login",
+        "https://agent.koreanair.com/user/login",
+    ]
+    for u in login_urls:
+        try:
+            page.goto(u, wait_until="domcontentloaded", timeout=10000)
+            page.wait_for_load_state("networkidle", timeout=4000)
+            if "login" not in page.url.lower():
+                break
+        except Exception:
+            continue
+
+    # 2) 폼 입력/제출
+    candidates = [
         {"user": 'input[name="username"]', "pass": 'input[name="password"]', "submit": 'button[type="submit"]'},
         {"user": '#username', "pass": '#password', "submit": 'button[type="submit"]'},
+        {"user": 'input[type="email"]', "pass": 'input[type="password"]', "submit": 'button[type="submit"]'},
         {"user": 'input[name="userId"]', "pass": 'input[name="userPwd"]', "submit": 'button, input[type="submit"]'},
     ]
-    for c in cands:
+    logged_in = False
+    for c in candidates:
         try:
             page.wait_for_selector(c["user"], timeout=2000)
             page.fill(c["user"], user)
             page.fill(c["pass"], pwd)
             page.click(c["submit"])
             page.wait_for_load_state("networkidle", timeout=8000)
-            logging.info("로그인 시도(성공 추정)")
-            return True
+            logged_in = True
+            break
         except Exception:
             continue
-    logging.info("로그인 시도 실패/불필요")
+
+    # 3) 성공 판정(로그아웃/프로필 표시 등)
+    if logged_in:
+        try:
+            ok = False
+            for txt in ["로그아웃", "Log out", "Logout", "마이페이지", "프로필", "Profile", "My"]:
+                if page.locator(f'text="{txt}"').count() > 0:
+                    ok = True
+                    break
+            logging.info("로그인 시도 결과: %s", "성공 추정" if ok else "성공 여부 불명")
+            return ok or True
+        except Exception:
+            return True
+
+    logging.info("로그인 시도 실패 또는 폼 미탐지")
     return False
 
 def dismiss_banners(page):
@@ -160,7 +206,7 @@ def extract_posts_via_dom(page) -> List[Post]:
     base = page.url
     posts: List[Post] = []
 
-    sel = 'a[href*="/service/usage/bulletin/"]'
+    sel = 'a[href*="/service/usage/bulletin"]'
     try:
         page.wait_for_selector(sel, timeout=15000)
     except PWTimeout:
@@ -184,9 +230,10 @@ def extract_posts_via_dom(page) -> List[Post]:
         if not href or len(title) < 3:
             continue
         full = absolutize(base, href)
-        if full.rstrip("/").endswith("/service/usage/bulletin"):
+        path = urlparse(full).path
+        if BULLETIN_ROOT.search(path):
             continue
-        if not DETAIL_PATH_PAT.search(href):
+        if not BULLETIN_LINK_OK.search(full):
             continue
         date_hint = None
         try:
@@ -208,7 +255,7 @@ def extract_posts_via_dom(page) -> List[Post]:
     return out
 
 ANCHOR_RE = re.compile(
-    r'<a[^>]+href=["\'](?P<href>[^"\']*/service/usage/bulletin/[^"\']+)["\'][^>]*>(?P<text>.*?)</a>',
+    r'<a[^>]+href=["\'](?P<href>[^"\']*/service/usage/bulletin[^"\']*)["\'][^>]*>(?P<text>.*?)</a>',
     re.I | re.S
 )
 TAG_STRIP_RE = re.compile(r"<[^>]+>")
@@ -221,9 +268,10 @@ def extract_posts_via_html(html: str, base: str) -> List[Post]:
         if not href or not text:
             continue
         full = absolutize(base, href)
-        if full.rstrip("/").endswith("/service/usage/bulletin"):
+        path = urlparse(full).path
+        if BULLETIN_ROOT.search(path):
             continue
-        if not DETAIL_PATH_PAT.search(href):
+        if not BULLETIN_LINK_OK.search(full):
             continue
         posts.append(Post(text, full))
         if len(posts) >= MAX_ITEMS:
@@ -248,7 +296,7 @@ def format_posts(posts: List[Post]) -> str:
 def main():
     seen = load_seen()
 
-    # 🔧 디버그 플래그
+    # 디버그 플래그
     STARTUP_PING = os.getenv("STARTUP_PING", "0").lower() in {"1", "true", "yes"}
     FORCE_SNAPSHOT = os.getenv("FORCE_SNAPSHOT", "0").lower() in {"1", "true", "yes"}
     DEBUG_HTML = os.getenv("DEBUG_HTML", "0").lower() in {"1", "true", "yes"}
@@ -274,27 +322,40 @@ def main():
         page = context.new_page()
 
         page.goto(START_URL, wait_until="domcontentloaded", timeout=30000)
-        try_login(page)
         try:
             page.wait_for_load_state("networkidle", timeout=8000)
         except PWTimeout:
             pass
         dismiss_banners(page)
 
-        # === C: DOM → HTML → requests 순서로 추출 + 단계별 텔레그램 핑 ===
+        # 1차: DOM 추출
         posts = extract_posts_via_dom(page)
         logging.info("DOM anchors: %d", len(posts))
         if STARTUP_PING:
             tg_ping(f"ℹ️ DOM 추출: {len(posts)}건")
 
+        # 필요 시 로그인 시도 후 목록으로 복귀 → 재추출
+        if not posts and os.getenv("KAL_USER") and os.getenv("KAL_PASS"):
+            try_login(page)
+            try:
+                page.goto(START_URL, wait_until="domcontentloaded", timeout=20000)
+                page.wait_for_load_state("networkidle", timeout=6000)
+            except Exception:
+                pass
+            posts = extract_posts_via_dom(page)
+            logging.info("DOM anchors(after login): %d", len(posts))
+            if STARTUP_PING:
+                tg_ping(f"ℹ️ 로그인 후 DOM: {len(posts)}건")
+
+        # HTML 저장(옵션)
         if DEBUG_HTML:
             try:
-                html_tmp = page.content()
                 with open("/tmp/kal_page.html", "w", encoding="utf-8") as f:
-                    f.write(html_tmp)
+                    f.write(page.content())
             except Exception:
                 pass
 
+        # 2차: HTML 파싱
         if not posts:
             try:
                 html = page.content()
@@ -305,6 +366,7 @@ def main():
             except Exception:
                 posts = []
 
+        # 3차: requests 파싱
         if not posts:
             try:
                 resp = requests.get(START_URL, headers={"User-Agent": UA, "Accept-Language": "ko"}, timeout=15)
@@ -315,7 +377,6 @@ def main():
                         tg_ping(f"ℹ️ requests 파싱: {len(posts)}건 (status {resp.status_code})")
             except Exception:
                 pass
-        # === C 끝 ===
 
         browser.close()
 
