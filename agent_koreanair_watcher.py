@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Korean Air Agent bulletin watcher (Playwright)
+Korean Air Agent bulletin watcher (강화판)
 - 대상: https://agent.koreanair.com/service/usage/bulletin
 - 동작:
-  1) 페이지 접속(필요시 로그인 시도 가능)
-  2) 게시글 링크(경로에 /service/usage/bulletin/ 포함)만 위에서부터 수집
-  3) 최초 1회: 스냅샷(최신 10건)만 전송 → 상태파일 커밋
-  4) 이후: 새 글이 있을 때만 그 글들만 전송
+  1) Playwright로 진입(ko-KR, Asia/Seoul, 커스텀 UA) → 배너/팝업 자동 닫기
+  2) 상세글 링크만 수집: a[href*="/service/usage/bulletin/"] 이면서
+     정확히 .../bulletin 으로 끝나는 목록 루트 링크는 제외
+  3) 최초 1회 스냅샷(최신 10건) → 상태 파일 커밋 전제
+  4) 이후엔 새 글만 알림
+  5) 실패 시 HTML 정규식 Fallback (page.content() → requests.get())
 
-환경변수(Secrets 권장):
-  TG_BOT_TOKEN, TG_CHAT_ID   : 텔레그램
-  START_URL                  : 시작 URL(기본 https://agent.koreanair.com/service/usage/bulletin)
-  MAX_ITEMS                  : 긁을 최대 개수(기본 60)
-  SNAPSHOT_TOP_N             : 스냅샷 표시 개수(기본 10)
-  KAL_USER, KAL_PASS         : (선택) 포털 로그인 필요 시
+필요 ENV(Secrets 권장):
+  TG_BOT_TOKEN, TG_CHAT_ID
+  START_URL (기본: https://agent.koreanair.com/service/usage/bulletin)
+  SNAPSHOT_TOP_N (기본 10), MAX_ITEMS(기본 60)
+  KAL_USER, KAL_PASS  # 로그인 필요할 때만(보통 불필요)
 """
-
 import os
 import re
 import json
@@ -30,9 +30,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-DETAIL_PATH_PAT = re.compile(r"/service/usage/bulletin/(?!$)[^?#/][^?#]*", re.I)
-
-# 상태 파일(레포 루트에 생성 → 커밋되어야 함)
+# ---------- 설정/상태 ----------
 STATE_FILE = Path(__file__).with_name("seen_posts.json")
 BASELINE_FLAG = Path(__file__).with_name(".kal_baseline_done")
 
@@ -42,14 +40,17 @@ START_URL = os.getenv("START_URL", "https://agent.koreanair.com/service/usage/bu
 MAX_ITEMS = int(os.getenv("MAX_ITEMS", "60"))
 SNAPSHOT_TOP_N = int(os.getenv("SNAPSHOT_TOP_N", "10"))
 
-# ---------------- 유틸 ----------------
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
+DETAIL_PATH_PAT = re.compile(r"/service/usage/bulletin/(?!$)[^?#/][^?#]*", re.I)
+
+# ---------- 유틸 ----------
 class Post:
     def __init__(self, title: str, url: str, date: Optional[str] = None):
-        self.title = title.strip()
-        self.url = url.strip()
-        # URL이 가장 신뢰되는 ID. 없으면 title+url 해시 백업
-        self.id = self.url if self.url else hashlib.sha1(f"{self.title}|{self.url}".encode("utf-8")).hexdigest()
+        self.title = (title or "").strip()
+        self.url = (url or "").strip()
+        self.id = self.url if self.url else hashlib.sha1(f"{self.title}|{self.url}".encode()).hexdigest()
         self.date = date
 
 def absolutize(base: str, href: str) -> str:
@@ -80,22 +81,19 @@ def load_seen() -> Dict[str, Dict]:
 def save_seen(seen: Dict[str, Dict]):
     STATE_FILE.write_text(json.dumps(seen, ensure_ascii=False, indent=2), encoding="utf-8")
 
-# ---------------- 로그인(필요시) ----------------
-
+# ---------- 로그인 & 배너 제거 ----------
 def try_login(page) -> bool:
     user = os.getenv("KAL_USER")
     pwd = os.getenv("KAL_PASS")
     if not (user and pwd):
         logging.info("로그인 정보 미제공 → 비로그인으로 시도")
         return False
-
-    candidates = [
+    cands = [
         {"user": 'input[name="username"]', "pass": 'input[name="password"]', "submit": 'button[type="submit"]'},
         {"user": '#username', "pass": '#password', "submit": 'button[type="submit"]'},
-        {"user": 'input[type="email"]', "pass": 'input[type="password"]', "submit": 'button[type="submit"]'},
         {"user": 'input[name="userId"]', "pass": 'input[name="userPwd"]', "submit": 'button, input[type="submit"]'},
     ]
-    for c in candidates:
+    for c in cands:
         try:
             page.wait_for_selector(c["user"], timeout=2000)
             page.fill(c["user"], user)
@@ -104,21 +102,27 @@ def try_login(page) -> bool:
             page.wait_for_load_state("networkidle", timeout=8000)
             logging.info("로그인 시도(성공 추정)")
             return True
-        except PWTimeout:
-            continue
         except Exception:
             continue
-    logging.info("로그인 시도 실패 또는 불필요")
+    logging.info("로그인 시도 실패/불필요")
     return False
 
-# ---------------- 목록 추출 ----------------
+def dismiss_banners(page):
+    # 자주 보이는 동의/닫기 버튼들 시도
+    labels = ["동의", "확인", "닫기", "Accept", "Agree", "OK"]
+    for txt in labels:
+        try:
+            btn = page.locator(f'button:has-text("{txt}")')
+            if btn.count() > 0:
+                btn.first.click(timeout=1000)
+        except Exception:
+            pass
 
+# ---------- 날짜 추출(옵션) ----------
 DATE_PATS = [
-    re.compile(r"\b(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})\b"),
+    re.compile(r"\b(20\d{2})[./-](\d{1,2})[./-](\d{1,2})\b"),
     re.compile(r"\b(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일\b"),
-    re.compile(r"\b(20\d{2})\.(\d{1,2})\.(\d{1,2})\b"),
 ]
-
 def extract_date_near(text: str) -> Optional[str]:
     if not text:
         return None
@@ -132,78 +136,97 @@ def extract_date_near(text: str) -> Optional[str]:
                 pass
     return None
 
-def extract_posts(page) -> List[Post]:
+# ---------- 목록 추출 ----------
+def extract_posts_via_dom(page) -> List[Post]:
     """
-    /service/usage/bulletin/뒤에 슬러그가 붙은 상세 링크만 수집.
-    (예: /service/usage/bulletin/12345, /service/usage/bulletin/w25-dom-... 등)
-    최신이 상단이라고 가정 → 보이는 순서대로 가져옴.
+    DOM에서 상세글 링크만 수집:
+    a[href*="/service/usage/bulletin/"] 이면서, 정확히 .../bulletin 루트는 제외
     """
     base = page.url
     posts: List[Post] = []
 
-    # 게시판 컨테이너 우선 탐색
-    containers = page.query_selector_all(
-        'main, section, article, div, ul, ol'
-        '[class*="bulletin"], main[class*="board"], section[class*="board"], div[class*="board"], ul[class*="list"], ol[class*="list"]'
-    )
-    if not containers:
-        containers = page.query_selector_all("main, section, article, div, ul, ol")
+    sel = 'a[href*="/service/usage/bulletin/"]'
+    # 첫 로딩 대기
+    try:
+        page.wait_for_selector(sel, timeout=15000)
+    except PWTimeout:
+        pass
 
-    def add_from_anchors(anchors):
-        for a in anchors:
-            try:
-                href = (a.get_attribute("href") or "").strip()
-                title = (a.inner_text() or "").strip()
-            except Exception:
-                continue
-            if not href or len(title) < 3:
-                continue
+    # 스크롤 다운 한 번(지연 로딩 대비)
+    try:
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
 
-            # 목록(루트) 제외, 상세만 통과
-            # - 정확히 /service/usage/bulletin 만 가리키는 링크는 제외
-            path = href.split("://", 1)[-1]  # 절대/상대 모두 커버
-            if href.rstrip("/").endswith("/service/usage/bulletin"):
-                continue
-            if not DETAIL_PATH_PAT.search(href):
-                continue
+    anchors = page.locator(sel)
+    count = anchors.count()
+    for i in range(min(count, MAX_ITEMS)):
+        a = anchors.nth(i)
+        try:
+            href = (a.get_attribute("href") or "").strip()
+            title = (a.inner_text() or "").strip()
+        except Exception:
+            continue
+        if not href or len(title) < 3:
+            continue
+        # 목록 루트(/.../bulletin) 제외
+        full = absolutize(base, href)
+        if full.rstrip("/").endswith("/service/usage/bulletin"):
+            continue
+        if not DETAIL_PATH_PAT.search(href):
+            continue
+        # 날짜 힌트(부모 텍스트)
+        date_hint = None
+        try:
+            parent_txt = a.evaluate("el => el.closest('li, tr, article, div')?.innerText || ''")
+            date_hint = extract_date_near(parent_txt)
+        except Exception:
+            pass
+        posts.append(Post(title=title, url=full, date=date_hint))
 
-            full = absolutize(base, href)
-            if full.lower().startswith("javascript:"):
-                continue
-
-            # 날짜 힌트(부모에서 추출: li/tr/article 등)
-            date_hint = None
-            try:
-                parent_txt = a.evaluate("el => el.closest('li, tr, article, div')?.innerText || ''")
-                date_hint = extract_date_near(parent_txt)
-            except Exception:
-                pass
-
-            posts.append(Post(title=title, url=full, date=date_hint))
-
-    # 컨테이너 내 a 태그 우선
-    for c in containers:
-        anchors = c.query_selector_all("a[href]")
-        add_from_anchors(anchors)
-        if len(posts) >= MAX_ITEMS:
-            break
-
-    # Fallback: 페이지 전체 a[href]에서 한 번 더 시도
-    if len(posts) < 3:
-        add_from_anchors(page.query_selector_all("a[href]"))
-
-    # 중복 제거(상단 우선 유지)
+    # 중복 제거
     seen = set()
-    deduped: List[Post] = []
+    out: List[Post] = []
     for p in posts:
         if p.id in seen:
             continue
         seen.add(p.id)
-        deduped.append(p)
-        if len(deduped) >= MAX_ITEMS:
+        out.append(p)
+        if len(out) >= MAX_ITEMS:
             break
+    return out
 
-    return deduped
+ANCHOR_RE = re.compile(
+    r'<a[^>]+href=["\'](?P<href>[^"\']*/service/usage/bulletin/[^"\']+)["\'][^>]*>(?P<text>.*?)</a>',
+    re.I | re.S
+)
+TAG_STRIP_RE = re.compile(r"<[^>]+>")
+
+def extract_posts_via_html(html: str, base: str) -> List[Post]:
+    posts: List[Post] = []
+    for m in ANCHOR_RE.finditer(html or ""):
+        href = m.group("href")
+        text = TAG_STRIP_RE.sub("", m.group("text")).strip()
+        if not href or not text:
+            continue
+        full = absolutize(base, href)
+        if full.rstrip("/").endswith("/service/usage/bulletin"):
+            continue
+        if not DETAIL_PATH_PAT.search(href):
+            continue
+        posts.append(Post(text, full))
+        if len(posts) >= MAX_ITEMS:
+            break
+    # 중복 제거
+    seen = set()
+    out: List[Post] = []
+    for p in posts:
+        if p.id in seen:
+            continue
+        seen.add(p.id)
+        out.append(p)
+    return out
 
 def format_posts(posts: List[Post]) -> str:
     lines = []
@@ -212,15 +235,25 @@ def format_posts(posts: List[Post]) -> str:
         lines.append(f"- {p.title}{date}\n  {p.url}")
     return "\n".join(lines)
 
-# ---------------- 메인 ----------------
-
+# ---------- 메인 ----------
 def main():
     seen = load_seen()
     want_snapshot = (not BASELINE_FLAG.exists())
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        context = browser.new_context()
+        browser = pw.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+        context = browser.new_context(
+            user_agent=UA,
+            locale="ko-KR",
+            timezone_id="Asia/Seoul",
+            java_script_enabled=True,
+            viewport={"width": 1366, "height": 900},
+        )
+        # Accept-Language 헤더
+        context.set_extra_http_headers({"Accept-Language": "ko,en;q=0.9"})
         page = context.new_page()
 
         page.goto(START_URL, wait_until="domcontentloaded", timeout=30000)
@@ -229,40 +262,28 @@ def main():
             page.wait_for_load_state("networkidle", timeout=8000)
         except PWTimeout:
             pass
+        dismiss_banners(page)
 
-        posts = extract_posts(page)
+        posts = extract_posts_via_dom(page)
+
+        # DOM으로 못 찾으면 HTML 파싱으로 재시도
+        if not posts:
+            try:
+                html = page.content()
+                posts = extract_posts_via_html(html, page.url)
+            except Exception:
+                posts = []
+
+        # 그래도 없으면 requests로 최후 재시도(SSR 대응)
+        if not posts:
+            try:
+                resp = requests.get(START_URL, headers={"User-Agent": UA, "Accept-Language": "ko"}, timeout=15)
+                if resp.ok:
+                    posts = extract_posts_via_html(resp.text, START_URL)
+            except Exception:
+                pass
+
         browser.close()
 
     if not posts:
-        logging.info("게시글을 찾지 못했습니다.")
-        return
-
-    # 최초 1회 스냅샷(최신 10개)
-    if want_snapshot:
-        topn = posts[:SNAPSHOT_TOP_N]
-        text = "KAL Agent 스냅샷 (최신 10건)\n\n" + format_posts(topn)
-        notify_telegram(text)
-
-        now = int(time.time())
-        for p in posts:
-            seen[p.id] = {"title": p.title, "url": p.url, "date": p.date, "ts": now}
-        save_seen(seen)
-        BASELINE_FLAG.write_text("done", encoding="utf-8")
-        logging.info("스냅샷 전송 및 상태 파일 생성 완료")
-        return
-
-    # 이후: 새 글만
-    new_posts = [p for p in posts if p.id not in seen]
-    if new_posts:
-        text = f"KAL Agent 새 글 알림 ({len(new_posts)}건)\n\n" + format_posts(new_posts)
-        notify_telegram(text)
-        now = int(time.time())
-        for p in new_posts:
-            seen[p.id] = {"title": p.title, "url": p.url, "date": p.date, "ts": now}
-        save_seen(seen)
-        logging.info("새 글 %d건 전송/저장 완료", len(new_posts))
-    else:
-        logging.info("새 글 없음")
-
-if __name__ == "__main__":
-    main()
+        logging.in
