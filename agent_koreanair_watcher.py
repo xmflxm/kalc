@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Korean Air Agent bulletin watcher (클릭 네비게이션 + 상세제목 추출)
-- 시작 URL: 최신순 정렬 페이지
-- 목록에서 실제로 '클릭'해서 상세 URL/제목을 얻음(SPA에서 <a href>가 없을 때 대응)
-- 처음 1회는 스냅샷 10건 전송, 이후엔 새 글만 전송
+Korean Air Agent bulletin watcher
+- 최신순 페이지에서 카드(목록)를 실제 클릭 → 상세 URL/제목/등록일 수집
+- 최초 1회 스냅샷(10건), 이후 새 글만 텔레그램 알림
 """
 
 import os
@@ -19,13 +18,13 @@ from typing import List, Dict, Optional
 import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-# ---------- 상태 파일 ----------
+# ----- 상태 파일 -----
 STATE_FILE = Path(__file__).with_name("seen_posts.json")
 BASELINE_FLAG = Path(__file__).with_name(".kal_baseline_done")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# 최신순 페이지(검증된 링크)
+# 최신순 페이지(확인된 링크)
 DEFAULT_START = "https://agent.koreanair.com/service/usage/bulletin?currentPage=1&sortByNewest=true"
 START_URL = os.getenv("START_URL", DEFAULT_START)
 
@@ -38,7 +37,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # 상세 URL 패턴
 DETAIL_OK = re.compile(r"/service/usage/bulletin/[^/?#]+", re.I)
 
-# ---------- 유틸 ----------
+# ===== 유틸 =====
 class Post:
     def __init__(self, title: str, url: str, date: Optional[str] = None):
         self.title = (title or "").strip()
@@ -88,41 +87,96 @@ def dismiss_banners(page):
 def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
 
+def _to_ymd(s: str) -> Optional[str]:
+    if not s:
+        return None
+    # 2025-10-10 / 2025.10.10 / 2025년 10월 10일 → YYYY-MM-DD
+    m = re.search(r"(20\d{2})[.\-년\s]*(\d{1,2})[.\-월\s]*(\d{1,2})", s)
+    if not m:
+        return None
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    return f"{y:04d}-{mo:02d}-{d:02d}"
+
+# ===== 1-a 수정: 상세 페이지에서 '제목' 정확 추출 =====
 def get_detail_title(page) -> Optional[str]:
-    """상세 페이지에서 실제 제목을 추출."""
-    # 1) og:title
+    """상세 페이지의 '제목' 필드 우선 추출(사이트 전용 휴리스틱)."""
+    # 1) dt:has('제목') + dd
+    try:
+        loc = page.locator("dt:has-text('제목') + dd").first
+        if loc.count() > 0:
+            v = _clean(loc.inner_text())
+            if len(v) > 3:
+                return v
+    except Exception:
+        pass
+    # 2) 카드/본문 헤더 후보
+    for sel in ["article h3", "article h2", "section h3", "section h2"]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                v = _clean(loc.inner_text())
+                if len(v) > 3 and not re.search(r"공지사항\s*상세|상세보기", v):
+                    return v
+        except Exception:
+            pass
+    # 3) og:title
     try:
         v = page.locator('meta[property="og:title"]').first.get_attribute("content")
         v = _clean(v)
-        if v and len(v) > 3:
+        if v and len(v) > 3 and not re.search(r"공지사항\s*상세|상세보기", v):
             return v
     except Exception:
         pass
-    # 2) H-tag / role=heading
+    # 4) h1/h2/role=heading
     for sel in ["h1", "h2", "[role='heading']"]:
         try:
             loc = page.locator(sel).first
             if loc.count() > 0:
                 v = _clean(loc.inner_text())
-                if len(v) > 3:
+                if len(v) > 3 and not re.search(r"공지사항\s*상세|상세보기", v):
                     return v
         except Exception:
             pass
-    # 3) <title>
+    # 5) <title> (사이트명 꼬리 제거)
     try:
         v = _clean(page.title())
         if len(v) > 3:
             v = re.sub(r"\s*[-|–]\s*KAL.*$", "", v)
-            return v
+            if not re.search(r"공지사항\s*상세|상세보기", v):
+                return v
     except Exception:
         pass
     return None
 
-# ---------- 핵심: 클릭으로 상세 URL/제목 수집 ----------
+def get_detail_date(page) -> Optional[str]:
+    """상세 페이지의 '등록일'을 YYYY-MM-DD로 추출."""
+    # 1) dt:has('등록일') + dd
+    try:
+        loc = page.locator("dt:has-text('등록일') + dd").first
+        if loc.count() > 0:
+            return _to_ymd(loc.inner_text())
+    except Exception:
+        pass
+    # 2) <time> 태그
+    try:
+        loc = page.locator("time").first
+        if loc.count() > 0:
+            v = _to_ymd(loc.inner_text() or loc.get_attribute("datetime") or "")
+            if v:
+                return v
+    except Exception:
+        pass
+    # 3) 본문에서 최후 보정
+    try:
+        return _to_ymd(page.inner_text("body"))
+    except Exception:
+        return None
+
+# ===== 목록 클릭 수집 =====
 def collect_posts_by_click(page) -> List[Post]:
     posts: List[Post] = []
 
-    # 렌더 대기 + 스크롤로 항목 더 로딩
+    # 네트워크 안정화 + 스크롤로 항목 더 로딩
     try:
         page.wait_for_load_state("networkidle", timeout=8000)
     except Exception:
@@ -134,7 +188,7 @@ def collect_posts_by_click(page) -> List[Post]:
     except Exception:
         pass
 
-    # 클릭 후보(조금 넓게 수집)
+    # 클릭 후보(넓게)
     CAND_SELECTOR = (
         "a, [role='link'], button, [onclick], "
         "li, article, div[class*='list'], div[class*='item']"
@@ -151,28 +205,20 @@ def collect_posts_by_click(page) -> List[Post]:
             if len(txt) < 4:
                 continue
 
-            # 날짜 후보(간단 패턴)
-            date_txt = ""
-            try:
-                date_cand = page.locator("text=/\\d{4}-\\d{2}-\\d{2}/").first
-                if date_cand.count() > 0:
-                    date_txt = _clean(date_cand.inner_text())
-            except Exception:
-                pass
-
             before = page.url
             with page.expect_navigation(wait_until="domcontentloaded", timeout=10000):
                 el.click()
 
             cur = page.url
             if DETAIL_OK.search(cur):
-                # 상세 페이지에서 다시 제목 추출
-                detail_title = get_detail_title(page) or txt
-                posts.append(Post(title=detail_title, url=cur, date=date_txt))
+                # 상세에서 제목/등록일 정확 추출 (★ 1-a 반영)
+                title = get_detail_title(page) or txt
+                date_txt = get_detail_date(page) or ""
+                posts.append(Post(title=title, url=cur, date=date_txt))
             else:
                 logging.info("상세 패턴 불일치: %s", cur)
 
-            # 목록으로 복귀
+            # 목록 복귀
             page.go_back(wait_until="domcontentloaded")
             try:
                 page.wait_for_load_state("networkidle", timeout=5000)
@@ -183,7 +229,6 @@ def collect_posts_by_click(page) -> List[Post]:
         except Exception as e:
             logging.info("클릭 실패(%d): %s", i, e)
             try:
-                # 목록이 날아갔으면 처음 URL로 복구
                 page.goto(START_URL, wait_until="domcontentloaded", timeout=15000)
             except Exception:
                 pass
@@ -198,7 +243,7 @@ def collect_posts_by_click(page) -> List[Post]:
         out.append(p)
     return out
 
-# ---------- 메인 ----------
+# ===== 메인 =====
 def main():
     seen = load_seen()
     want_snapshot = not BASELINE_FLAG.exists()
@@ -207,7 +252,10 @@ def main():
         want_snapshot = True
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+        browser = pw.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
         context = browser.new_context(
             user_agent=UA,
             locale="ko-KR",
@@ -230,7 +278,7 @@ def main():
         logging.info("게시글을 찾지 못했습니다.")
         return
 
-    # 날짜가 있으면 최신순 비슷하게 정렬
+    # 날짜 기준 정렬(있으면)
     def key_func(p: Post):
         m = re.match(r"(\d{4})-(\d{2})-(\d{2})", p.date or "")
         if m:
