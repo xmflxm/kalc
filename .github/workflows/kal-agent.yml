@@ -26,12 +26,6 @@ jobs:
           pip install playwright requests
           python -m playwright install chromium
 
-      - name: Curl raw HTML (debug)
-        run: |
-          curl -sSL -H 'User-Agent: Mozilla/5.0' -H 'Accept-Language: ko,en;q=0.9' \
-            'https://agent.koreanair.com/service/usage/bulletin' > /tmp/raw.html || true
-          wc -c /tmp/raw.html || true
-
       - name: Run watcher
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
@@ -42,13 +36,7 @@ jobs:
         run: |
           python agent_koreanair_watcher.py
 
-      - name: Preflight: list debug files
-        if: always()
-        run: |
-          echo "== /tmp files =="
-          ls -la /tmp || true
-
-      - name: Upload captured artifacts (debug)
+      - name: Upload artifacts (debug)
         if: always()
         uses: actions/upload-artifact@v4
         with:
