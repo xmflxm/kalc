@@ -84,85 +84,88 @@ def dismiss_banners(page):
             pass
 
 def collect_posts_by_click(page) -> List[Post]:
-    """목록에서 제목을 '클릭'하여 상세 URL을 얻는다."""
+    """
+    목록 셀렉터에 의존하지 않고, 화면의 클릭 가능한 요소들을 실제 클릭해
+    상세 URL을 확보한다. (SPA에서 <a href>가 없는 경우 대응)
+    """
     posts: List[Post] = []
 
-    # 목록 UL/OL 로드 대기
-    list_selector = "ol, ul"
+    # 화면이 그려질 시간을 조금 주고, 아래로 스크롤
     try:
-        page.wait_for_selector(list_selector, timeout=10000)
-    except PWTimeout:
-        logging.info("목록 컨테이너 대기 실패")
-        return posts
+        page.wait_for_load_state("networkidle", timeout=8000)
+    except Exception:
+        pass
+    try:
+        page.mouse.wheel(0, 1800)
+        page.wait_for_timeout(400)
+    except Exception:
+        pass
 
-    # 각 항목(li) 찾기 (핀/카테고리 등 클래스 다양 → li 전체에서 제목 영역 찾기)
-    items = page.locator("li").all()
-    if not items:
-        logging.info("li 항목 없음")
-        return posts
+    # 후보: a, role=link, button, onclick 보유, 제목스팬을 감싼 div 등
+    CAND_SELECTOR = (
+        "a, [role='link'], button, [onclick], "
+        "div:has(> span), li, div[class*='list'], div[class*='item'], article"
+    )
+    elems = page.locator(CAND_SELECTOR)
+    n = min(elems.count(), MAX_LIST)
+    logging.info("클릭 후보 %d개 중 %d개 시도", elems.count(), n)
 
-    count = min(len(items), MAX_LIST)
-    logging.info("목록 항목 %d개 중 %d개 시도", len(items), count)
-
-    for idx in range(count):
-        li = items[idx]
+    for i in range(n):
+        el = elems.nth(i)
         try:
-            # 제목 텍스트가 들어간 영역(스팬) 찾기
-            title_span = li.locator("span").first
-            title_txt = title_span.inner_text().strip()
-            if not title_txt or len(title_txt) < 2:
+            txt = (el.inner_text() or "").strip()
+            # 너무 짧은 텍스트/아이콘 전용은 건너뛰기
+            if not txt or len(txt) < 4:
                 continue
-
-            # 날짜도 같이 추출(있으면)
-            date_txt = ""
-            try:
-                date_txt = li.locator("p:has-text('-')").last.inner_text().strip()
-                # YYYY-MM-DD 형태만 간단 필터
-                if not re.search(r"\d{4}-\d{2}-\d{2}", date_txt):
-                    date_txt = ""
-            except Exception:
+            # 제목스러운 키워드가 있으면 가산점 (없어도 시도)
+            if any(k in txt for k in ["공지", "안내", "W", "국내선", "스케줄", "REACCM"]):
                 pass
 
-            # 제목을 감싼 a/div 클릭 시 상세로 이동하는 구조 → 클릭
-            # a 태그에 href가 없어도 click 가능
-            clickable = li.locator("a, div, span").filter(has_text=title_txt).first
-            # 현재 URL 기억
             before = page.url
-            # 새 탭이 아니라 same-tab 라우팅 가정
-            with page.expect_navigation(wait_until="domcontentloaded", timeout=10000):
-                clickable.click()
+            # 라우팅 예상 → 페이지 전환을 기다림
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=8000):
+                el.click()
 
-            # 이동 후 URL 검사
             cur = page.url
             if DETAIL_OK.search(cur):
-                posts.append(Post(title=title_txt, url=cur, date=date_txt))
+                # 상세 페이지 제목을 다시 한 번 읽어서 보정(가능할 때)
+                try:
+                    h = page.locator("h1, h2").first
+                    if h.count() > 0:
+                        htxt = (h.inner_text() or "").strip()
+                        if len(htxt) >= 4:
+                            txt = htxt
+                except Exception:
+                    pass
+                posts.append(Post(title=txt, url=cur))
             else:
                 logging.info("상세 패턴 불일치: %s", cur)
 
-            # 뒤로 가서 목록 복귀
+            # 목록으로 복귀
             page.go_back(wait_until="domcontentloaded")
-            # 목록 재등장 대기
-            page.wait_for_selector(list_selector, timeout=8000)
-
-            # 너무 빠른 클릭 방지
-            time.sleep(0.2)
+            try:
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+            page.wait_for_timeout(200)
 
         except Exception as e:
-            logging.info("항목 %d 처리 실패: %s", idx, e)
-            # 목록 복구 시도
+            logging.info("클릭 실패(%d): %s", i, e)
+            # 목록이 사라졌으면 시작 URL로 복구
             try:
-                if not page.locator(list_selector).is_visible():
-                    page.goto(START_URL, wait_until="domcontentloaded", timeout=15000)
+                page.goto(START_URL, wait_until="domcontentloaded", timeout=15000)
             except Exception:
                 pass
             continue
 
-    # 중복 제거(제목/URL 기준)
-    uniq = {}
+    # 중복 제거
+    uniq, out = set(), []
     for p in posts:
-        if p.id not in uniq:
-            uniq[p.id] = p
-    return list(uniq.values())
+        if p.id in uniq:
+            continue
+        uniq.add(p.id)
+        out.append(p)
+    return out
 
 def main():
     seen = load_seen()
