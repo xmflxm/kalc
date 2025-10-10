@@ -30,21 +30,19 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          START_URL: "https://agent.koreanair.com/service/usage/bulletin"
-          STARTUP_PING: "1"
-          DEBUG_HTML: "1"
+          START_URL: "https://agent.koreanair.com/service/usage/bulletin?currentPage=1&sortByNewest=true"
+          SNAPSHOT_TOP_N: "10"
         run: |
           python agent_koreanair_watcher.py
 
-      - name: Upload artifacts (debug)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kal-artifacts
-          path: |
-            /tmp/kal_page.html
-            /tmp/kal_page.png
-            /tmp/kal_frame_*.html
-            /tmp/kal_frame_*.png
-            /tmp/raw.html
-          if-no-files-found: ignore
+      - name: Commit & push state if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet --exit-code; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update state files [skip ci]"
+            git push
+          fi
