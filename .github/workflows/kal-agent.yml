@@ -2,7 +2,7 @@ name: KAL Agent Watcher
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/30 * * * *"   # 30분마다(UTC)
   workflow_dispatch: {}
 
 permissions:
@@ -32,6 +32,9 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           START_URL: "https://agent.koreanair.com/service/usage/bulletin?currentPage=1&sortByNewest=true"
           SNAPSHOT_TOP_N: "10"
+          MAX_LIST: "80"
+          # 필요 시 1회만 스냅샷 강제
+          # FORCE_SNAPSHOT: "1"
         run: |
           python agent_koreanair_watcher.py
 
