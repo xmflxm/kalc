@@ -95,6 +95,9 @@ def _to_ymd(s: str) -> Optional[str]:
     if not m:
         return None
     y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    # ✅ 유효 범위 검증 (0일, 13월 같은 값 거르기)
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return None
     return f"{y:04d}-{mo:02d}-{d:02d}"
 
 # ===== 1-a 수정: 상세 페이지에서 '제목' 정확 추출 =====
