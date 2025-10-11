@@ -103,64 +103,120 @@ def _to_ymd(s: str) -> Optional[str]:
 # ===== 1-a 수정: 상세 페이지에서 '제목' 정확 추출 =====
 def get_detail_title(page) -> Optional[str]:
     """상세 페이지의 '제목' 필드 우선 추출(사이트 전용 휴리스틱)."""
-    # 1) dt:has('제목') + dd
-    try:
-        loc = page.locator("dt:has-text('제목') + dd").first
-        if loc.count() > 0:
-            v = _clean(loc.inner_text())
-            if len(v) > 3:
-                return v
-    except Exception:
-        pass
-    # 2) 카드/본문 헤더 후보
-    for sel in ["article h3", "article h2", "section h3", "section h2"]:
+    bad = re.compile(r"(공지사항\s*상세|상세보기|KEMATE\[Agent\])", re.I)
+
+    def ok(v: str) -> Optional[str]:
+        v = _clean(v)
+        if len(v) > 3 and not bad.search(v):
+            return v
+        return None
+
+    # 1) dt/th 라벨 기반: '제목' 인접한 dd/td
+    for sel in [
+        "dt:has-text('제목') + dd",
+        "th:has-text('제목') + td",
+        "dt:has-text('제 목') + dd",
+        "th:has-text('제 목') + td",
+    ]:
         try:
             loc = page.locator(sel).first
             if loc.count() > 0:
-                v = _clean(loc.inner_text())
-                if len(v) > 3 and not re.search(r"공지사항\s*상세|상세보기", v):
+                v = ok(loc.inner_text())
+                if v:
                     return v
         except Exception:
             pass
-    # 3) og:title
+
+    # 2) 카드/본문 대표 헤더
+    for sel in [
+        "article h3", "article h2", "section h3", "section h2",
+        ".view-header h3", ".board-view h3", ".board-view .title",
+        ".subject", ".tit", ".title"
+    ]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                v = ok(loc.inner_text())
+                if v:
+                    return v
+        except Exception:
+            pass
+
+    # 3) 본문 첫 굵은 텍스트도 후보로
+    for sel in ["article strong", "article b", "main strong"]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                v = ok(loc.inner_text())
+                if v:
+                    return v
+        except Exception:
+            pass
+
+    # 4) og:title / h1,h2 / <title>
     try:
         v = page.locator('meta[property="og:title"]').first.get_attribute("content")
-        v = _clean(v)
-        if v and len(v) > 3 and not re.search(r"공지사항\s*상세|상세보기", v):
+        v = ok(v or "")
+        if v:
             return v
     except Exception:
         pass
-    # 4) h1/h2/role=heading
+
     for sel in ["h1", "h2", "[role='heading']"]:
         try:
             loc = page.locator(sel).first
             if loc.count() > 0:
-                v = _clean(loc.inner_text())
-                if len(v) > 3 and not re.search(r"공지사항\s*상세|상세보기", v):
+                v = ok(loc.inner_text())
+                if v:
                     return v
         except Exception:
             pass
-    # 5) <title> (사이트명 꼬리 제거)
+
     try:
         v = _clean(page.title())
-        if len(v) > 3:
-            v = re.sub(r"\s*[-|–]\s*KAL.*$", "", v)
-            if not re.search(r"공지사항\s*상세|상세보기", v):
-                return v
+        v = re.sub(r"\s*[-|–]\s*KAL.*$", "", v)
+        v = ok(v)
+        if v:
+            return v
     except Exception:
         pass
+
     return None
 
 def get_detail_date(page) -> Optional[str]:
-    """상세 페이지의 '등록일'을 YYYY-MM-DD로 추출."""
-    # 1) dt:has('등록일') + dd
-    try:
-        loc = page.locator("dt:has-text('등록일') + dd").first
-        if loc.count() > 0:
-            return _to_ymd(loc.inner_text())
-    except Exception:
-        pass
-    # 2) <time> 태그
+    """상세 페이지의 '등록일/작성일/게시일'을 YYYY-MM-DD로 추출."""
+    label_selectors = [
+        "dt:has-text('등록일') + dd",
+        "th:has-text('등록일') + td",
+        "dt:has-text('작성일') + dd",
+        "th:has-text('작성일') + td",
+        "dt:has-text('게시일') + dd",
+        "th:has-text('게시일') + td",
+        "dt:has-text('등록 일자') + dd",
+        "th:has-text('등록 일자') + td",
+    ]
+    for sel in label_selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                v = _to_ymd(loc.inner_text())
+                if v:
+                    return v
+        except Exception:
+            pass
+
+    # 흔한 클래스
+    for sel in [".date", ".reg-date", ".write-date", ".post-date"]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                v = _to_ymd(loc.inner_text())
+                if v:
+                    return v
+        except Exception:
+            pass
+
+    # <time> 태그
     try:
         loc = page.locator("time").first
         if loc.count() > 0:
@@ -169,7 +225,8 @@ def get_detail_date(page) -> Optional[str]:
                 return v
     except Exception:
         pass
-    # 3) 본문에서 최후 보정
+
+    # 최후: 본문 전체에서 날짜 모양
     try:
         return _to_ymd(page.inner_text("body"))
     except Exception:
@@ -214,7 +271,7 @@ def collect_posts_by_click(page) -> List[Post]:
 
             cur = page.url
             if DETAIL_OK.search(cur):
-                # 상세에서 제목/등록일 정확 추출 (★ 1-a 반영)
+                # ✅ 상세에서 '제목/등록일'로 최종 보정
                 title = get_detail_title(page) or txt
                 date_txt = get_detail_date(page) or ""
                 posts.append(Post(title=title, url=cur, date=date_txt))
