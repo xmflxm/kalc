@@ -70,5 +70,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1039",
     "date": "2025-10-14",
     "ts": 1760404281
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1040": {
+    "title": "이용약관",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1040",
+    "date": "2025-10-14",
+    "ts": 1760413148
   }
 }
