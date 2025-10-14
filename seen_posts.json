@@ -64,5 +64,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1038",
     "date": "2025-01-01",
     "ts": 1760324460
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1039": {
+    "title": "[스케줄] [SEA] `25년 동계 PUS/DAD CRS OPEN 안내 (KE8459/0)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1039",
+    "date": "2025-10-14",
+    "ts": 1760404281
   }
 }
