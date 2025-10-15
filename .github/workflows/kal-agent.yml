@@ -1,8 +1,13 @@
 name: KAL Agent Watcher
 
 on:
+  # KST(UTC+9) 평일 08~21시만 매시 정각에 실행
   schedule:
-    - cron: "*/60 * * * *"   # 60분마다(UTC)
+    # KST 08:00 → UTC 전날 23:00 (일~목)
+    - cron: "0 23 * * 0-4"
+    # KST 09:00~21:00 → UTC 월~금 00:00~12:00
+    - cron: "0 0-12 * * 1-5"
+  # 수동 실행도 가능(가드 스텝이 공휴일/시간대 체크)
   workflow_dispatch: {}
 
 permissions:
@@ -12,33 +17,57 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
+      # ── 가드: 대한민국 공휴일이면 스킵 ─────────────────────────────
+      - name: Guard: skip Korean public holidays (KST)
+        id: holi
+        run: |
+          set -e
+          sudo apt-get update -y >/dev/null && sudo apt-get install -y jq >/dev/null
+          KST_DATE=$(TZ=Asia/Seoul date +%F)   # YYYY-MM-DD
+          YEAR=$(TZ=Asia/Seoul date +%Y)
+          URL="https://date.nager.at/api/v3/PublicHolidays/$YEAR/KR"
+          echo "KST today: $KST_DATE"
+          # 오늘이 공휴일이면 1, 아니면 0
+          IS_HOLI=$(curl -fsSL "$URL" | jq -r --arg d "$KST_DATE" '([.[]?.date] | index($d)) | if .==null then "0" else "1" end')
+          if [ "$IS_HOLI" = "1" ]; then
+            echo "run=false" >> $GITHUB_OUTPUT
+            echo "⛔ 공휴일 스킵: $KST_DATE"
+          else
+            echo "run=true" >> $GITHUB_OUTPUT
+            echo "✅ 공휴일 아님 → 계속"
+          fi
+
       - name: Checkout
+        if: steps.holi.outputs.run == 'true'
         uses: actions/checkout@v4
 
       - name: Setup Python
+        if: steps.holi.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
       - name: Install Playwright
+        if: steps.holi.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install playwright requests
           python -m playwright install chromium
 
       - name: Run watcher
+        if: steps.holi.outputs.run == 'true'
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           START_URL: "https://agent.koreanair.com/service/usage/bulletin?currentPage=1&sortByNewest=true"
           SNAPSHOT_TOP_N: "10"
           MAX_LIST: "80"
-          # 필요 시 1회만 스냅샷 강제
-          # FORCE_SNAPSHOT: "1"
+          # FORCE_SNAPSHOT: "1"   # ← 1회만 스냅샷 강제하고 싶을 때 잠깐 켜기
         run: |
           python agent_koreanair_watcher.py
 
       - name: Commit & push state if changed
+        if: steps.holi.outputs.run == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
