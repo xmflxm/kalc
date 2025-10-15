@@ -2,7 +2,7 @@ name: KAL Agent Watcher
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # 30분마다(UTC)
+    - cron: "*/60 * * * *"   # 60분마다(UTC)
   workflow_dispatch: {}
 
 permissions:
