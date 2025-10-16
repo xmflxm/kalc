@@ -1,8 +1,9 @@
 name: KAL Agent Watcher
 
 on:
+  # KST(UTC+9) 평일 08~21시 정각 실행
   schedule:
-    - cron: "0 23 * * 0-4"   # KST 08:00 (UTC-1일 23:00, 일~목)
+    - cron: "0 23 * * 0-4"   # KST 08:00 (UTC 전날 23:00, 일~목)
     - cron: "0 0-12 * * 1-5" # KST 09:00~21:00 (UTC 00:00~12:00, 월~금)
   workflow_dispatch: {}
 
@@ -13,6 +14,7 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
+      # 공휴일이면 실행 스킵 (대한민국 공휴일 API 사용)
       - name: Guard - skip Korean public holidays (KST)
         id: holi
         run: |
@@ -58,6 +60,7 @@ jobs:
           START_URL: "https://agent.koreanair.com/service/usage/bulletin?currentPage=1&sortByNewest=true"
           SNAPSHOT_TOP_N: "10"
           MAX_LIST: "24"
+          # FORCE_SNAPSHOT: "1"   # ← 1회만 스냅샷 강제하고 싶을 때 잠깐 켜기
         run: |
           python agent_koreanair_watcher.py
 
@@ -73,3 +76,17 @@ jobs:
             git commit -m "chore: update state files [skip ci]"
             git push
           fi
+
+      # (옵션) 디버그 아티팩트 — 기본 비활성, 필요 시 env에 DEBUG_ARTIFACTS=1 넣고 사용
+      - name: Upload artifacts (debug)
+        if: env.DEBUG_ARTIFACTS == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kal-artifacts
+          path: |
+            /tmp/kal_page.html
+            /tmp/kal_page.png
+            /tmp/kal_frame_*.html
+            /tmp/kal_frame_*.png
+            /tmp/raw.html
+          if-no-files-found: ignore
