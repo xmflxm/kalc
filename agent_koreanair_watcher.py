@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Korean Air Agent bulletin watcher (빠른 클릭 수집 + 상세 제목/등록일 추출)
-- 시작 URL: 최신순 정렬 페이지
-- 목록 카드를 실제 클릭해 상세 URL/제목/등록일 수집(SPA에서 <a href> 없음 대응)
+Korean Air Agent bulletin watcher (public-repo safe)
+- 최신순 페이지에서 카드(목록)를 클릭해 상세 URL/제목/등록일 수집 (SPA 대응)
 - 최초 1회 스냅샷(10건), 이후 새 글만 텔레그램 알림
 - 실행시간 단축: 후보 범위 축소, 블랙리스트, 짧은 타임아웃, URL-change 폴링
+- 공개 레포 안전: 토큰은 Secrets에서만 읽고, 로그/파일에 민감정보 미노출
 """
 
 import os
@@ -20,7 +20,7 @@ from typing import List, Dict, Optional
 import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-# ── 상태 파일 ────────────────────────────────────────────────────────────────
+# ── 상태 파일 (커밋되어도 민감정보 無) ───────────────────────────────────────
 STATE_FILE = Path(__file__).with_name("seen_posts.json")
 BASELINE_FLAG = Path(__file__).with_name(".kal_baseline_done")
 
@@ -49,15 +49,19 @@ class Post:
         self.date = (date or "").strip() or None
 
 def notify_telegram(text: str):
+    """Secrets에서 토큰/챗ID만 읽어서 사용. 어떤 경우에도 토큰 내용을 로그로 출력하지 않음."""
     token = os.getenv("TG_BOT_TOKEN")
     chat_id = os.getenv("TG_CHAT_ID")
     if not (token and chat_id):
         logging.warning("텔레그램 토큰/챗ID 미설정 → 알림 생략")
         return
-    api = f"https://api.telegram.org/bot{token}/sendMessage"
-    r = requests.post(api, data={"chat_id": chat_id, "text": text})
-    if r.status_code != 200:
-        logging.warning("텔레그램 전송 실패: %s %s", r.status_code, r.text)
+    try:
+        api = f"https://api.telegram.org/bot{token}/sendMessage"
+        r = requests.post(api, data={"chat_id": chat_id, "text": text}, timeout=10)
+        if r.status_code != 200:
+            logging.warning("텔레그램 전송 실패: %s %s", r.status_code, r.text[:200])
+    except Exception as e:
+        logging.warning("텔레그램 전송 예외: %s", e)
 
 def load_seen() -> Dict[str, Dict]:
     if STATE_FILE.exists():
