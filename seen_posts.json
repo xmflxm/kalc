@@ -76,5 +76,35 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1040",
     "date": "2025-10-14",
     "ts": 1760413148
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1048": {
+    "title": "[스케줄] [AME] '26년 하계 ATL CRS OPEN 안내 (KE033/4)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1048",
+    "date": "2025-10-23",
+    "ts": 1761203097
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1047": {
+    "title": "[일본] 고베(UKB) 노선 PCF 조정 통보",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1047",
+    "date": "2025-10-23",
+    "ts": 1761203097
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1046": {
+    "title": "[스케줄] [CHN] '26년 하계 XIY, P/TAO CRS OPEN 안내 (KE141/2, KE2081/2)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1046",
+    "date": "2025-10-23",
+    "ts": 1761203097
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1044": {
+    "title": "캄보디아 지역 여행경보 상향 조정에 따른 고객 안내 협조 요청",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1044",
+    "date": "2025-10-17",
+    "ts": 1761203097
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1041": {
+    "title": "[발권] 캄보디아 신공항 (KTI) 도시명 변경 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1041",
+    "date": "2025-10-16",
+    "ts": 1761203097
   }
 }
