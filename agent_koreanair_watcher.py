@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Korean Air Agent bulletin watcher (public-repo safe)
-- 최신순 페이지에서 카드(목록)를 클릭해 상세 URL/제목/등록일 수집 (SPA 대응)
+Korean Air Agent bulletin watcher (public-repo safe, link-first + click-fallback)
+- 최신순 페이지에서 먼저 a[href^="/service/usage/bulletin/"] 링크로 빠르게 수집
+- 링크가 없거나 부족하면 클릭 폴백으로 상세 URL/제목/등록일 수집 (SPA 대응)
 - 최초 1회 스냅샷(10건), 이후 새 글만 텔레그램 알림
-- 실행시간 단축: 후보 범위 축소, 블랙리스트, 짧은 타임아웃, URL-change 폴링
-- 공개 레포 안전: 토큰은 Secrets에서만 읽고, 로그/파일에 민감정보 미노출
+- 실행시간 단축: 후보 축소, 블랙리스트, 짧은 타임아웃, URL-change 폴링
+- 공개 레포 안전: 토큰은 Secrets에서만 읽고, 민감정보 로그/파일에 미노출
+- 디버그: DEBUG_ARTIFACTS=1 일 때 /tmp 에 HTML/스크린샷 저장(워크플로에서만 업로드)
 """
 
 import os
@@ -31,8 +33,11 @@ DEFAULT_START = "https://agent.koreanair.com/service/usage/bulletin?currentPage=
 START_URL = os.getenv("START_URL", DEFAULT_START)
 
 # 실행 속도/범위 설정
-MAX_LIST = int(os.getenv("MAX_LIST", "24"))         # 클릭 후보 최대 개수(권장 24~32)
+MAX_LIST = int(os.getenv("MAX_LIST", "24"))         # 클릭/링크 후보 최대 개수(권장 24~32)
 SNAPSHOT_TOP_N = int(os.getenv("SNAPSHOT_TOP_N", "10"))
+
+# 디버그 아티팩트 저장 여부(워크플로에서만 켬)
+DEBUG_ARTIFACTS = os.getenv("DEBUG_ARTIFACTS", "0").lower() in {"1", "true", "yes"}
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
@@ -90,6 +95,19 @@ def dismiss_banners(page):
                 btn.first.click(timeout=600)
         except Exception:
             pass
+
+def dump_debug(page, name="kal_page"):
+    """DEBUG_ARTIFACTS=1 일 때 /tmp 로 HTML/스크린샷 저장"""
+    if not DEBUG_ARTIFACTS:
+        return
+    try:
+        html = page.content()
+        Path("/tmp").mkdir(parents=True, exist_ok=True)
+        Path(f"/tmp/{name}.html").write_text(html, encoding="utf-8")
+        page.screenshot(path=f"/tmp/{name}.png", full_page=True)
+        logging.info("디버그 저장: /tmp/%s.html, /tmp/%s.png", name, name)
+    except Exception as e:
+        logging.info("디버그 저장 실패: %s", e)
 
 def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
@@ -239,7 +257,65 @@ def get_detail_date(page) -> Optional[str]:
     except Exception:
         return None
 
-# ── 목록 클릭 수집(빠른 버전) ────────────────────────────────────────────────
+# ── 링크 우선 수집 ──────────────────────────────────────────────────────────
+def collect_posts_by_links(page) -> List[Post]:
+    """메인 영역에서 a[href^='/service/usage/bulletin/']만 빠르게 수집."""
+    posts: List[Post] = []
+
+    # 메인 스코프
+    scope_locator = page.locator("main, [role='main'], #__next main, #app main")
+    scope = scope_locator if scope_locator.count() > 0 else page.locator("body")
+
+    links = scope.locator("a[href^='/service/usage/bulletin/']")
+    cnt = links.count()
+    if cnt == 0:
+        return posts
+
+    logging.info("링크 기반 후보 %d개 발견", cnt)
+
+    # 중복 제거 및 상한 적용
+    hrefs = []
+    seen_href = set()
+    for i in range(min(cnt, MAX_LIST)):
+        try:
+            h = links.nth(i).get_attribute("href") or ""
+            if not h or h in seen_href:
+                continue
+            seen_href.add(h)
+            if h.startswith("/"):
+                h = f"https://agent.koreanair.com{h}"
+            hrefs.append(h)
+        except Exception:
+            continue
+
+    # 각 상세로 진입해서 제목/등록일 추출
+    for url in hrefs:
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=7000)
+            title = get_detail_title(page) or ""
+            date_txt = get_detail_date(page) or ""
+            if not title:
+                continue
+            posts.append(Post(title=title, url=url, date=date_txt))
+            page.go_back(wait_until="domcontentloaded")
+        except Exception as e:
+            logging.info("링크 진입 실패: %s", e)
+            try:
+                page.goto(START_URL, wait_until="domcontentloaded", timeout=7000)
+            except Exception:
+                pass
+            continue
+
+    # 중복 제거
+    uniq, out = set(), []
+    for p in posts:
+        if p.id in uniq:
+            continue
+        uniq.add(p.id)
+        out.append(p)
+    return out
+
+# ── 클릭 폴백 수집(빠른 버전) ───────────────────────────────────────────────
 def collect_posts_by_click(page) -> List[Post]:
     posts: List[Post] = []
 
@@ -261,11 +337,12 @@ def collect_posts_by_click(page) -> List[Post]:
         scope_locator = scope_locator[0]
     scope = scope_locator if scope_locator.count() > 0 else page.locator("body")
 
-    # 클릭 후보: 카드/리스트 항목 위주 (헤더/푸터/가이드 제외)
+    # 제목/버튼/a태그 위주로 좁히기 (헤더/푸터/가이드 제외)
     CAND_SELECTOR = (
-        "article, li, [role='listitem'], "
-        "div[class*='list'], div[class*='item'], "
-        "a[role='button'], button"
+        "a[role='button'], button, "
+        "a[href*='bulletin/'], "
+        "[class*='title'] a, .title a, "
+        "article a, li a"
     )
     elems = scope.locator(CAND_SELECTOR)
 
@@ -299,9 +376,6 @@ def collect_posts_by_click(page) -> List[Post]:
         el = elems.nth(i)
         try:
             txt = _clean(el.inner_text() or "")
-            if len(txt) < 4:
-                continue
-
             href = ""
             try:
                 href = el.get_attribute("href") or ""
@@ -311,15 +385,10 @@ def collect_posts_by_click(page) -> List[Post]:
             if is_black(txt, href):
                 continue
 
-            # 카드 힌트(키워드)가 전혀 없으면 스킵 → 속도 ↑
-            if not any(k in txt for k in ["공지", "안내", "스케줄", "W", "국내선", "국제선"]):
-                continue
-
             tried += 1
             if tried > MAX_LIST:
                 break
 
-            # 가시화 & 클릭
             try:
                 el.scroll_into_view_if_needed(timeout=1000)
             except Exception:
@@ -335,17 +404,14 @@ def collect_posts_by_click(page) -> List[Post]:
                     continue
 
             if not quick_nav_change(old, wait_ms=2000):
-                # 이동 안 했으면 패스
                 continue
 
             cur = page.url
             if is_detail(cur):
-                # 상세에서 제목/등록일 정밀 추출
-                title = get_detail_title(page) or txt
+                title = get_detail_title(page) or txt or "(제목 없음)"
                 date_txt = get_detail_date(page) or ""
                 posts.append(Post(title=title, url=cur, date=date_txt))
 
-            # 목록으로 빠르게 복귀
             page.go_back(wait_until="domcontentloaded")
             try:
                 page.wait_for_load_state("networkidle", timeout=3000)
@@ -354,7 +420,6 @@ def collect_posts_by_click(page) -> List[Post]:
 
         except Exception as e:
             logging.info("클릭 실패(%d): %s", i, e)
-            # 시작 URL로 짧게 복구
             try:
                 page.goto(START_URL, wait_until="domcontentloaded", timeout=5000)
             except Exception:
@@ -390,7 +455,7 @@ def main():
             java_script_enabled=True,
             viewport={"width": 1366, "height": 950},
         )
-        # ★ 기본 타임아웃 단축
+        # 기본 타임아웃 단축
         context.set_default_navigation_timeout(5000)  # 5s
         context.set_default_timeout(4000)             # 4s
 
@@ -402,7 +467,17 @@ def main():
         except PWTimeout:
             pass
 
-        posts = collect_posts_by_click(page)
+        # 1) 링크 우선 수집
+        posts = collect_posts_by_links(page)
+
+        # 2) 실패 시 클릭 폴백
+        if not posts:
+            dump_debug(page, "kal_page_before_click")  # 디버그
+            posts = collect_posts_by_click(page)
+
+        # 디버그 스냅샷
+        dump_debug(page, "kal_page_final")
+
         browser.close()
 
     if not posts:
