@@ -1,14 +1,21 @@
 name: KAL Agent Watcher
 
 on:
-  # KST(UTC+9) 평일 08~21시 정각 실행
+  # KST(UTC+9) 평일 08:00~21:30, 30분 간격 실행
   schedule:
-    - cron: "0 23 * * 0-4"   # KST 08:00 (UTC 전날 23:00, 일~목)
-    - cron: "0 0-12 * * 1-5" # KST 09:00~21:00 (UTC 00:00~12:00, 월~금)
+    # KST 08:00, 08:30 → UTC 전날 23:00, 23:30 (일~목)
+    - cron: "0,30 23 * * 0-4"
+    # KST 09:00~21:30 → UTC 월~금 00:00~12:30
+    - cron: "0,30 0-12 * * 1-5"
   workflow_dispatch: {}
 
 permissions:
   contents: write
+
+# 동시 실행 방지: 새 트리거가 오면 진행중인 실행을 취소
+concurrency:
+  group: kal-agent
+  cancel-in-progress: true
 
 jobs:
   run:
@@ -39,6 +46,17 @@ jobs:
         if: steps.holi.outputs.run == 'true'
         uses: actions/checkout@v4
 
+      # 지터(랜덤 대기 0~20초) — 트래픽 패턴 분산
+      - name: Jitter
+        if: steps.holi.outputs.run == 'true'
+        run: |
+          python - <<'PY'
+          import random, time
+          d = random.randint(0, 20)
+          print(f"[jitter] sleeping {d}s")
+          time.sleep(d)
+          PY
+
       - name: Setup Python
         if: steps.holi.outputs.run == 'true'
         uses: actions/setup-python@v5
@@ -60,6 +78,7 @@ jobs:
           START_URL: "https://agent.koreanair.com/service/usage/bulletin?currentPage=1&sortByNewest=true"
           SNAPSHOT_TOP_N: "10"
           MAX_LIST: "24"
+          # DEBUG_ARTIFACTS: "1"  # ← 필요할 때만 켜서 HTML/PNG 확인
           # FORCE_SNAPSHOT: "1"   # ← 1회만 스냅샷 강제하고 싶을 때 잠깐 켜기
         run: |
           python agent_koreanair_watcher.py
