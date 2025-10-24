@@ -106,5 +106,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1041",
     "date": "2025-10-16",
     "ts": 1761203097
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1049": {
+    "title": "국내선 신분증 할인 코드",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1049",
+    "date": "2025-10-24",
+    "ts": 1761272256
   }
 }
