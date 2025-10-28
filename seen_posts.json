@@ -112,5 +112,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1049",
     "date": "2025-10-24",
     "ts": 1761272256
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1051": {
+    "title": "W25 DOM PAX TIME CHNG NOTICE 관련 REACCM PLAN",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1051",
+    "date": "2025-10-28",
+    "ts": 1761626527
   }
 }
