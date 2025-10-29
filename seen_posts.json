@@ -118,5 +118,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1051",
     "date": "2025-10-28",
     "ts": 1761626527
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1052": {
+    "title": "[일본] 한국발 일본행 I/B Surcharge 조정 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1052",
+    "date": "2025-10-29",
+    "ts": 1761704931
   }
 }
