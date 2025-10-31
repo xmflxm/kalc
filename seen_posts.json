@@ -130,5 +130,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1053",
     "date": "2025-10-31",
     "ts": 1761867540
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1054": {
+    "title": "[스케줄] [CHN] `26년 하계 FOC CRS OPEN 안내 (KE127/8)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1054",
+    "date": "2025-10-31",
+    "ts": 1761894182
   }
 }
