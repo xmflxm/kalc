@@ -154,5 +154,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1089",
     "date": "2025-11-07",
     "ts": 1762498172
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1090": {
+    "title": "W25 DOM PAX SKD CHNG 관련 REAC PLAN 안내 (26년도 수능영향편)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1090",
+    "date": "2025-11-07",
+    "ts": 1762505192
   }
 }
