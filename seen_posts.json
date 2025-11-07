@@ -148,5 +148,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1088",
     "date": "2025-11-05",
     "ts": 1762325371
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1089": {
+    "title": "신규 CI 교체 재안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1089",
+    "date": "2025-11-07",
+    "ts": 1762498172
   }
 }
