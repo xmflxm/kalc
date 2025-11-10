@@ -166,5 +166,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1093",
     "date": "2025-11-10",
     "ts": 1762741840
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1094": {
+    "title": "W25 DOM PAX SKD CHNG 관련 REACCM PLAN 공지",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1094",
+    "date": "2025-11-10",
+    "ts": 1762749944
   }
 }
