@@ -160,5 +160,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1090",
     "date": "2025-11-07",
     "ts": 1762505192
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1093": {
+    "title": "2027년 국내선 성수기 운임 적용 기간 공지",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1093",
+    "date": "2025-11-10",
+    "ts": 1762741840
   }
 }
