@@ -178,5 +178,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1096",
     "date": "2025-01-02",
     "ts": 1762821798
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1097": {
+    "title": "[스케줄] [SEA] `25년 동계 CXR EXTRA CRS OPEN 안내 (KE8465/6)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1097",
+    "date": "2025-11-11",
+    "ts": 1762850770
   }
 }
