@@ -184,5 +184,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1097",
     "date": "2025-11-11",
     "ts": 1762850770
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1098": {
+    "title": "[스케줄] [DXB] `25년 동계 스케줄 변경 안내 (MAR)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1098",
+    "date": "2025-11-12",
+    "ts": 1762930197
   }
 }
