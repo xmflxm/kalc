@@ -190,5 +190,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1098",
     "date": "2025-11-12",
     "ts": 1762930197
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1100": {
+    "title": "[스케줄] [AME] `25년 동계 HNL CRS OPEN 안내 (KE8053/4)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1100",
+    "date": "2025-11-14",
+    "ts": 1763098849
   }
 }
