@@ -208,5 +208,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1102",
     "date": "2025-01-02",
     "ts": 1763362255
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1104": {
+    "title": "[공지] W25 GMP/PUS V.V N PUS/CJU V.V SKD CNXL REACCM PLAN",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1104",
+    "date": "2025-11-19",
+    "ts": 1763519164
   }
 }
