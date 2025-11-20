@@ -214,5 +214,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1104",
     "date": "2025-11-19",
     "ts": 1763519164
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1105": {
+    "title": "[운송] 프라하 공항 출입국 시스템 (EES) 등록 절차 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1105",
+    "date": "2025-11-20",
+    "ts": 1763617288
   }
 }
