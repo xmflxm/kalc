@@ -226,5 +226,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1107",
     "date": "2025-11-21",
     "ts": 1763707867
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1108": {
+    "title": "[ 안내 ] 항공권 환불시 유의사항 _ 환불 Penalty Waiver 적용시",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1108",
+    "date": "2025-11-24",
+    "ts": 1763958292
   }
 }
