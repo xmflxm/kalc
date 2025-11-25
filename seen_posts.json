@@ -238,5 +238,29 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1110",
     "date": "2025-11-25",
     "ts": 1764037693
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/906": {
+    "title": "[[중요]] O&D Malpractice 예약 규정 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/906",
+    "date": "2025-11-25",
+    "ts": 1764045936
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/921": {
+    "title": "[[중요]] O&D Malpractice 예약 규정 2차 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/921",
+    "date": "2025-11-25",
+    "ts": 1764045936
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/972": {
+    "title": "[[중요]] O&D Malpractice 예약 규정 3차 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/972",
+    "date": "2025-11-25",
+    "ts": 1764045936
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/999": {
+    "title": "[[중요]] O&D Malpractice 예약 규정 4차 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/999",
+    "date": "2025-11-25",
+    "ts": 1764045936
   }
 }
