@@ -262,5 +262,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/999",
     "date": "2025-11-25",
     "ts": 1764045936
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1106": {
+    "title": "[재공지] GSO 관련 AUTH 미입력, Fare Basis 오류 ADM 발행",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1106",
+    "date": "2025-11-21",
+    "ts": 1764060487
   }
 }
