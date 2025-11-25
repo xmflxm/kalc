@@ -232,5 +232,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1108",
     "date": "2025-11-24",
     "ts": 1763958292
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1110": {
+    "title": "[중국] HKG, RMQ 노선 3,4 수송 PCF 조정 통보",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1110",
+    "date": "2025-11-25",
+    "ts": 1764037693
   }
 }
