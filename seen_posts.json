@@ -274,5 +274,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1113",
     "date": "2025-11-27",
     "ts": 1764216860
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1115": {
+    "title": "[스케줄] [JPN] CTS CRS OPEN 안내 (KE769/0)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1115",
+    "date": "2025-11-27",
+    "ts": 1764223372
   }
 }
