@@ -286,5 +286,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1116",
     "date": "2025-11-27",
     "ts": 1764226340
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1117": {
+    "title": "[종합] O&D Malpractice 예약 규정 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1117",
+    "date": "2025-11-27",
+    "ts": 1764233284
   }
 }
