@@ -280,5 +280,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1115",
     "date": "2025-11-27",
     "ts": 1764223372
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1116": {
+    "title": "KOREAN AIR (KE) ADM POLICY",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1116",
+    "date": "2025-11-27",
+    "ts": 1764226340
   }
 }
