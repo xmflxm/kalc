@@ -292,5 +292,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1117",
     "date": "2025-11-27",
     "ts": 1764233284
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1118": {
+    "title": "[전노선/선원운임] Adjustment of Worldwide Seaman Guideline",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1118",
+    "date": "2025-11-28",
+    "ts": 1764305047
   }
 }
