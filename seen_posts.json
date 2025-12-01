@@ -298,5 +298,29 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1118",
     "date": "2025-11-28",
     "ts": 1764305047
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1123": {
+    "title": "[공지] W25 GMP/PUS V.V SKD CNXL 관련 REACCM PLAN",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1123",
+    "date": "2025-12-01",
+    "ts": 1764568056
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1122": {
+    "title": "[중동] 한국발 DXB행 PCF 운임 조정 통보",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1122",
+    "date": "2025-12-01",
+    "ts": 1764568056
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1121": {
+    "title": "[유럽] 한국발 유럽행 PCF 개정 통보",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1121",
+    "date": "2025-12-01",
+    "ts": 1764568056
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1120": {
+    "title": "[대양주] 한국발 뉴질랜드행 PCF 개정 통보",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1120",
+    "date": "2025-12-01",
+    "ts": 1764568056
   }
 }
