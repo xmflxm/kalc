@@ -334,5 +334,17 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1125",
     "date": "2025-12-02",
     "ts": 1764654121
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1127": {
+    "title": "[스케줄] [JPN] CTS EXTR CRS OPEN 안내 (KE8763/4)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1127",
+    "date": "2025-12-02",
+    "ts": 1764656191
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1126": {
+    "title": "[스케줄] [AME] HNL EXTR CRS OPEN 안내 (KE8051/2)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1126",
+    "date": "2025-12-02",
+    "ts": 1764656191
   }
 }
