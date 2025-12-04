@@ -346,5 +346,17 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1126",
     "date": "2025-12-02",
     "ts": 1764656191
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1129": {
+    "title": "[공지] W25 GMP/CJU TIME CHNG 관련 REACCM PLAN",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1129",
+    "date": "2025-12-04",
+    "ts": 1764823732
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1128": {
+    "title": "[공지] W25 GMP/PUS CNXL 관련 REACCM PLAN",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1128",
+    "date": "2025-12-04",
+    "ts": 1764823732
   }
 }
