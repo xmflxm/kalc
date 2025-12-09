@@ -358,5 +358,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1128",
     "date": "2025-12-04",
     "ts": 1764823732
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1162": {
+    "title": "[공지] W25 CJJ/CJU FLT NUMBER CHNG 관련 REACCM PLAN",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1162",
+    "date": "2025-12-09",
+    "ts": 1765255647
   }
 }
