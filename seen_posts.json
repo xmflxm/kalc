@@ -364,5 +364,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1162",
     "date": "2025-12-09",
     "ts": 1765255647
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1163": {
+    "title": "[스케줄] [AME] HNL (KE08051/2) CNXL & CRS OPEN 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1163",
+    "date": "2025-12-10",
+    "ts": 1765327518
   }
 }
