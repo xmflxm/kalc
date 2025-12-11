@@ -370,5 +370,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1163",
     "date": "2025-12-10",
     "ts": 1765327518
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1166": {
+    "title": "IATA ROE 변경 공지 (2026년 1월부)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1166",
+    "date": "2025-12-11",
+    "ts": 1765421236
   }
 }
