@@ -382,5 +382,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1167",
     "date": "2025-12-11",
     "ts": 1765428756
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1170": {
+    "title": "[발권] 2026년 1월 부 한국발 유류할증료 통보",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1170",
+    "date": "2025-12-16",
+    "ts": 1765860784
   }
 }
