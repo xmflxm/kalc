@@ -394,5 +394,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1171",
     "date": "2025-12-17",
     "ts": 1765938634
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1172": {
+    "title": "[동남아] 한국발 네팔행 EY 프로모션 운임 신설",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1172",
+    "date": "2025-12-18",
+    "ts": 1766034801
   }
 }
