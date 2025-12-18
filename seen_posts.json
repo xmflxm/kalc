@@ -400,5 +400,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1172",
     "date": "2025-12-18",
     "ts": 1766034801
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1173": {
+    "title": "[중국] 2025~2026년 한국발 SHA/HFE/HGH/NKG 노선 PCF Seasonality 조정 통보",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1173",
+    "date": "2025-12-18",
+    "ts": 1766036678
   }
 }
