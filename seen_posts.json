@@ -406,5 +406,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1173",
     "date": "2025-12-18",
     "ts": 1766036678
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1176": {
+    "title": "[스케줄] [CHN] `26년 하계 국제선 스케줄 변경 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1176",
+    "date": "2025-12-23",
+    "ts": 1766458105
   }
 }
