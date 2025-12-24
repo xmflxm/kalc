@@ -412,5 +412,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1176",
     "date": "2025-12-23",
     "ts": 1766458105
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1177": {
+    "title": "[CHN] `26년 하계 DYG노선 CRS OPEN 안내 (KE163/4)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1177",
+    "date": "2025-12-24",
+    "ts": 1766553342
   }
 }
