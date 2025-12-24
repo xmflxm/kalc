@@ -418,5 +418,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1177",
     "date": "2025-12-24",
     "ts": 1766553342
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1178": {
+    "title": "국내선 단체 좌석 신청/지원 방식 변경 확대 적용 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1178",
+    "date": "2025-12-24",
+    "ts": 1766559262
   }
 }
