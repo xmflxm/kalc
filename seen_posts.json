@@ -430,5 +430,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1179",
     "date": "2025-12-24",
     "ts": 1766562126
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1180": {
+    "title": "2026/27 한국지역 개인특별가 통보",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1180",
+    "date": "2025-12-29",
+    "ts": 1766977222
   }
 }
