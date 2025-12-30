@@ -442,5 +442,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1181",
     "date": "2025-12-30",
     "ts": 1767062996
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1182": {
+    "title": "[SEA] `26년 하계 GUM CRS OPEN 안내 (KE417/8)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1182",
+    "date": "2025-12-30",
+    "ts": 1767071898
   }
 }
