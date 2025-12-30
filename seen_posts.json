@@ -436,5 +436,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1180",
     "date": "2025-12-29",
     "ts": 1766977222
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1181": {
+    "title": "[공지] 한국지역본부 휴무 안내 (1/2 금)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1181",
+    "date": "2025-12-30",
+    "ts": 1767062996
   }
 }
