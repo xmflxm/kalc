@@ -448,5 +448,23 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1182",
     "date": "2025-12-30",
     "ts": 1767071898
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1185": {
+    "title": "[미주] 한국발 미국 일부 도시 행 KE Flight 이용 제한 통보",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1185",
+    "date": "2025-12-31",
+    "ts": 1767149363
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1184": {
+    "title": "[스케줄] [JPN] ICN/NRT EXTR CRS OPEN 안내 (KE8701/2)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1184",
+    "date": "2025-12-31",
+    "ts": 1767149363
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1183": {
+    "title": "[공지] kr_agentsupport@koreanair.com 메일 이용 중지 안내",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1183",
+    "date": "2025-12-31",
+    "ts": 1767149363
   }
 }
