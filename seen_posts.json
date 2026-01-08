@@ -478,5 +478,11 @@
     "url": "https://agent.koreanair.com/service/usage/bulletin/1187",
     "date": "2026-01-07",
     "ts": 1767746723
+  },
+  "https://agent.koreanair.com/service/usage/bulletin/1189": {
+    "title": "[스케줄] [SIN] 예약 CLOSED 안내 (KE647/8)",
+    "url": "https://agent.koreanair.com/service/usage/bulletin/1189",
+    "date": "2026-01-08",
+    "ts": 1767840676
   }
 }
